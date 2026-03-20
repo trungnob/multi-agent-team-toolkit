@@ -155,7 +155,7 @@ The `./send` flow:
 4. Clean up the temporary buffer
 5. Press Enter to submit
 
-Gemini CLI is the exception. The script first checks whether Gemini is visibly in `!` shell mode. If so, it sends one `Escape`, then a second only if shell mode is still visible. After that it uses `send-keys -l` to type the message literally, because Gemini can misinterpret pasted input while shell mode is active.
+Gemini CLI is the exception. The script checks for Gemini shell mode and suggestion UI, dismisses them only when they are actually visible, clears any stale queued input, and refuses to send if Gemini is still actively working. When Gemini is ready, it uses `send-keys -l` to type the message literally, because pasted input can be misinterpreted there.
 
 ### Chatroom and Archiving
 

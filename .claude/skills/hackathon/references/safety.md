@@ -34,7 +34,7 @@ Each invocation uses a PID-unique buffer name (`send_$$`) to prevent concurrent 
 
 ### Gemini Escape Workaround
 
-When sending to the Gemini CLI pane, the script first checks whether Gemini visibly shows `!` shell mode. Only then does it send `Escape`, wait briefly, and inspect the prompt again. Gemini reuses `Escape` for multiple UI layers, so the first press can dismiss suggestions or other transient UI without leaving shell mode. If the prompt still looks like shell mode, the script sends a second `Escape`, then delivers the message with `send-keys -l` instead of `paste-buffer`. That avoids the bug where an unconditional `Escape` toggles Gemini into shell mode and the subsequent paste gets interpreted as a shell command.
+When sending to the Gemini CLI pane, the script first checks whether Gemini visibly shows `!` shell mode, a suggestion overlay, or a busy "Working/Thinking" title. It only sends `Escape` when shell mode or suggestions are actually visible, clears any stale input with `Ctrl+U`, and refuses to queue a new message while Gemini is still working. Delivery still uses `send-keys -l` instead of `paste-buffer`. That avoids the bug where stale or pasted text gets interpreted as a shell command or accumulates in Gemini's chat box.
 
 ## Chatroom Archiving
 
