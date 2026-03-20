@@ -70,9 +70,11 @@ Display the command list above.
 ## Communication Etiquette
 
 ### Always reply to the chatroom
-When the User asks you a question or gives you a task (especially from the web chat), **always post your response to the chatroom** using `./chat`. The chatroom is the shared visible channel — the web chat reads from it. Pane-to-pane DMs (`./send`) are optional and supplementary; they must not replace chatroom replies.
+The chatroom (`chatroom.md`) is the shared visible channel that the web chat UI reads from. When the User asks you a question or gives you a task, **you must post your response to the chatroom** using `./chat`. 
 
-**Rule: If the User can't see your answer in the web chat, you didn't answer.**
+**Mandatory Rule:** If your response is intended for the User to see, it MUST be visible in the web chat. 
+
+Pane-to-pane direct messages (`./send`) are for private agent-to-agent coordination only and must not be used as the sole channel for replying to the User.
 
 ### Response rules
 1. **Only Respond When Necessary**:
