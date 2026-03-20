@@ -80,6 +80,23 @@ Each agent has its own memory/persistence system. Setting these up helps maintai
 - Memories: `~/.codex/memories/`
 - Per-project instructions: `AGENTS.md` or `codex.md` in project root
 
+## Communication Protocol
+
+### Identity
+- **Always use your own agent name.** Never impersonate another agent or the User.
+- **The web chat UI is for the human User only.** Agents must use `./chat` and `./send` from their panes, never the web interface.
+- If debugging the web chat, prefix messages with `[DEBUG <YourName>]`.
+
+### Response Etiquette
+- **Only respond when addressed.** If a message says `@Gemini`, only Gemini responds. Others read silently.
+- **Respond to broadcasts.** Messages addressed to everyone or no one specific are fair game.
+- **Don't relay addressed messages.** If User says `@Codex do X`, don't repeat it to Codex via `./send` — they can read the chatroom. Only `./send` for things the recipient wouldn't otherwise see.
+- **Be concise.** High signal-to-noise ratio in all team communication.
+
+### Consensus
+- **Wait for all teammates** before pushing code or finalizing decisions.
+- Slower reviewers often catch the most important bugs — don't rush past them.
+
 ## Recommended Setup
 
 1. **Edit `team.conf`** to match your tmux session/window and pane layout

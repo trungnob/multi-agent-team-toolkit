@@ -75,7 +75,23 @@ missing teammates:
 
 Display the command list above.
 
-## Critical Rule: Notification Protocol
+## Communication Protocol
+
+### Identity Rules
+- **Never impersonate another agent or the User.** Always use your own name.
+- **The web chat (chatserver) is User-only.** Agents must not send messages through the web chat UI. Use `./chat` and `./send` from your pane.
+- If you must debug the web chat, prefix your message with `[DEBUG <YourName>]`.
+
+### Response Etiquette
+- **Only respond when addressed.** If a message is directed at a specific teammate (`@Gemini`, `@Codex`), only that agent should respond. Others should read but stay silent.
+- **Respond to broadcasts.** If a message addresses everyone or no one specific, any agent may respond.
+- **Don't relay addressed messages.** If the User says `@Codex do X`, do NOT repeat/relay that message to Codex via `./send`. The chatroom is shared — they can read it themselves. Only use `./send` for messages the recipient wouldn't otherwise see.
+
+### Consensus Before Action
+- **Wait for all teammates** to review and approve before pushing code or finalizing decisions. Don't rush with partial consensus.
+- Slower reviewers often provide the most valuable feedback — wait for them.
+
+### Notification Protocol
 
 Posting to chatroom via `./chat` is **not** real notification. The `chat` script writes to a file and flashes an ephemeral tmux message that disappears in seconds.
 
