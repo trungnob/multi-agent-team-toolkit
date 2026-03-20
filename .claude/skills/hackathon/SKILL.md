@@ -1,6 +1,6 @@
 ---
 name: hackathon
-description: "This skill should be used when the user asks to \"chat with the team\", \"send a message to teammates\", \"check chatroom\", \"check team status\", \"sync with team\", \"notify teammates\", or mentions multi-agent coordination, team communication, or tmux pane messaging. Also triggers on /hackathon commands. Use this skill proactively whenever team coordination is needed during hackathon work."
+description: "This skill should be used when the user asks to \"chat with the team\", \"send a message to teammates\", \"check chatroom\", \"check team status\", \"sync with team\", \"notify teammates\", \"recruit teammates\", \"summon the team\", \"set up the team\", or mentions multi-agent coordination, team communication, or tmux pane messaging. Also triggers on /hackathon commands. Use this skill proactively whenever team coordination is needed during hackathon work."
 ---
 
 # Multi-Agent Team Communication
@@ -11,47 +11,33 @@ Coordinate a team of AI coding agents running in parallel tmux panes with a shar
 
 All agent names, pane numbers, and tmux targets are defined in `team.conf` at the project root. Read it before any operation that references panes or agent names.
 
-`team.conf` is the source of truth. Never hardcode a tmux session like `1:0`, and never assume another project's repo path. Resolve commands relative to the current project root.
-
-## Workflow
-
-1. Read `team.conf` before any operation that references panes or agent names.
-2. Read `chatroom.md` before starting substantial work.
-3. Treat `./chat` as the durable record and `./send` as the direct prompt-delivery mechanism.
-4. Use `./chat --sync` or `./send --all` only when teammates truly need immediate delivery.
-5. Use `./recruit` if the team panes are missing or mapped to the wrong tmux window.
-6. Report blockers and workflow issues immediately instead of silently working around them.
-
 ## Commands
 
 Based on the argument provided by the user ($ARGUMENTS), execute one of the following:
 
-### `chat <message>` — Persistent record
+### `recruit` — Summon the team
 
-Post to the shared chatroom:
-
-1. Read `team.conf`
-2. Run `./chat <YourName> "<message>"`
-
-### `announce <message>` — Persistent record + immediate team delivery
-
-Use this only when teammates truly need to see something immediately.
-
-1. Read `team.conf`
-2. Run `./chat --sync <YourName> "<message>"`
-
-### `send <pane> <message>` — Direct message
-
-Type a message directly into one teammate's CLI input:
+Detect the current tmux target, create missing panes, start all agents with the correct "no sandbox" options, and update `team.conf`.
 ```
-./send --from <YourName> <pane> "<message>"
+./recruit
 ```
-The `--from` flag prefixes the message with the sender's name so the receiver knows who sent it.
+Run this to quickly set up or recover the multi-agent environment in your current window.
 
-For a broadcast to all teammate panes in the current tmux target:
+### `chat <message>` — Broadcast to team (Synced)
+
+Post to chatroom AND send directly to every teammate so they process it.
 ```
-./send --from <YourName> --all "<message>"
+./chat --sync <YourName> "<message>"
 ```
+The `--sync` flag ensures the message is typed into every teammate's CLI input, following our Critical Rule.
+
+### `send <pane|--all> <message>` — Direct message
+
+Type a message directly into one or more teammate's CLI input:
+```
+./send --from <YourName> <pane|--all> "<message>"
+```
+Use `--all` to message everyone. The `--from` flag prefixes the message with the sender's name and logs it to the chatroom.
 
 ### `notify <pane> <message>` — Ephemeral ping
 
@@ -75,58 +61,56 @@ tmux capture-pane -t "<target>.<pane>" -p | tail -20
 
 1. Read chatroom
 2. Capture all teammate panes
-3. Post a status update via `chat` only if the user asked for a real team update
-
-### `recruit` — Rebuild the team layout
-
-Ensure the current tmux window has the standard 3-agent layout and launch any
-missing teammates:
-```
-./recruit --as Claude
-./recruit --as Gemini --force
-```
+3. Post a status update via `chat --sync`
 
 ### `help` (or no argument) — Show available commands
 
 Display the command list above.
 
-## Communication Protocol
+## Communication Etiquette
 
-### Identity Rules
-- **Never impersonate another agent or the User.** Always use your own name.
-- **The web chat (chatserver) is User-only by default.** Agents should not send normal coordination messages through the web chat UI. Use `./chat`, `./chat --sync`, and `./send` from your pane.
-- If browser-side debugging is unavoidable, prefix the message with `[DEBUG <YourName>]`.
+### Always reply to the chatroom
+When the User asks you a question or gives you a task (especially from the web chat), **always post your response to the chatroom** using `./chat`. The chatroom is the shared visible channel — the web chat reads from it. Pane-to-pane DMs (`./send`) are optional and supplementary; they must not replace chatroom replies.
 
-### Response Etiquette
-- **Only respond when addressed.** If a message is directed at a specific teammate (`@Gemini`, `@Codex`), only that agent should respond. Others should read but stay silent.
-- **Broadcasts are passive context.** If a message addresses everyone or no one specific, agents may respond, but no reply is required just because a broadcast was seen.
-- **Don't relay addressed messages.** If the User says `@Codex do X`, do NOT repeat or relay that message to Codex via `./send` unless the User explicitly asks for relay help.
+**Rule: If the User can't see your answer in the web chat, you didn't answer.**
 
-### Consensus Before Action
-- **Wait for all teammates** to review and approve before pushing code or finalizing decisions. Don't rush with partial consensus.
-- Slower reviewers often provide the most valuable feedback — wait for them.
+### Response rules
+1. **Only Respond When Necessary**:
+   - Respond if you are **directly addressed** (e.g., `@Gemini`).
+   - Respond if the message is addressed to the **entire team**, **everyone**, or the **user**.
+   - Respond if **no specific addressee** is mentioned and you have relevant input.
+2. **Read-Only Mode**:
+   - If a message is addressed to another specific teammate, read it to stay in sync, but **do not respond** and **do not relay/repeat** the message to them.
+3. **Be Concise**:
+   - Aim for high signal-to-noise ratio in all team communications.
 
-### Notification Protocol
+### DMs are optional, chatroom is mandatory
+- `./chat` to post to chatroom = **mandatory** for any reply the User should see
+- `./send` to DM a teammate = **optional** for urgent pane delivery
+- Never reply only via DM if the User asked the question
 
-Posting to chatroom via `./chat` is **not** real notification. The `chat` script writes to a file and flashes an ephemeral tmux message that disappears in seconds.
+## Critical Rule: Notification Protocol
 
-**Real notification = `./send` to their pane.** This types directly into the teammate's CLI input.
+Posting to chatroom via `./chat` (without `--sync`) is **not** real notification. The `chat` script writes to a file and flashes an ephemeral tmux message that disappears in seconds.
 
-Use `./chat` for the durable record. Use `./send` or `./chat --sync` only when prompt-level delivery is actually required.
+**Real notification = typing into their pane.**
 
-Never claim "notified the team" after only running `./chat`.
+Always use `./chat --sync` for general announcements or `./send` for direct messages. This ensures the team actually processes your input.
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `chat` | Append to chatroom + flash tmux notification to all panes |
-| `send` | Paste message into a teammate's CLI input via tmux buffer |
-| `notify` | Ephemeral tmux display-message on a single pane |
-| `archive` | Move old chatroom messages to `chatroom_archive.md` |
-| `chat-daemon` | Background daemon that auto-archives periodically |
+| `recruit` | Detect tmux target, create panes, start agents, update `team.conf`. |
+| `chat` | Append to chatroom + notify. Use `--sync` for full team delivery. |
+| `send` | Paste message into teammate CLI inputs. Supports `--all`. |
+| `notify` | Ephemeral tmux display-message on a single pane. |
+| `archive` | Move old chatroom messages to `chatroom_archive.md`. |
+| `chat-daemon` | Background daemon that auto-archives periodically. |
+
+*Note: The `send` script includes special logic for Gemini panes to handle shell-mode Escaping.*
 
 ## Additional Resources
 
 ### Reference Files
-- **`references/safety.md`** — Concurrency safety details, flock usage, tmux buffer handling, and the Gemini escape-key workaround
+- **`references/safety.md`** — Concurrency safety details, flock usage, and tmux buffer handling.
