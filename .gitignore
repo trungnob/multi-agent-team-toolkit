@@ -1,3 +1,5 @@
 chatroom.md
 chatroom_archive.md
 .chat-daemon.log
+__pycache__/
+uploads/

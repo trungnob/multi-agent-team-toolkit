@@ -415,19 +415,15 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
                 error = f"Chat script failed: {res.stderr.strip()}"
 
             if not error and name == "User":
-                conf = _read_team_conf()
-                panes = [v for k, v in sorted(conf.items()) if k.startswith("PANE_")]
-                for pane in panes:
-                    res = subprocess.run(
-                        [SEND_SCRIPT, "--from", name, pane, message],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    if res.returncode != 0:
-                        detail = res.stderr.strip() or res.stdout.strip()
-                        error = f"Send script failed for pane {pane}: {detail}"
-                        break
+                res = subprocess.run(
+                    [SEND_SCRIPT, "--all", f"[{name}]: {message}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode != 0:
+                    detail = res.stderr.strip() or res.stdout.strip()
+                    error = f"Send script failed: {detail}"
 
         if error:
             self._send_json({"ok": False, "error": error}, 500)
