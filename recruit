@@ -100,8 +100,8 @@ if [ -z "$TMUX" ]; then
   exit 1
 fi
 
-CURRENT_TARGET=$(tmux display-message -p '#S:#I')
-CURRENT_PANE=$(tmux display-message -p '#P')
+CURRENT_TARGET=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I')
+CURRENT_PANE=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_index}')
 
 AGENT_CLAUDE="Claude"
 AGENT_GEMINI="Gemini"
@@ -185,7 +185,8 @@ for pane in "${AVAILABLE_PANES[@]}"; do
 done
 
 for role in $REMAINING_ROLES; do
-  for pane in "${AVAILABLE_PANES[@]}"; do
+  for i in "${!AVAILABLE_PANES[@]}"; do
+    pane="${AVAILABLE_PANES[$i]}"
     case "$role" in
       Claude) [ -n "${PANE_CLAUDE:-}" ] && continue ;;
       Gemini) [ -n "${PANE_GEMINI:-}" ] && continue ;;
@@ -257,7 +258,8 @@ cat > "$CONF_PATH" << EOF
 # Automatically updated by ./recruit
 
 # Tmux session and window
-TMUX_TARGET="$CURRENT_TARGET"
+# Set to "auto" or "current" to always target the current session/window.
+TMUX_TARGET="auto"
 
 # Pane assignments
 PANE_CLAUDE=$PANE_CLAUDE

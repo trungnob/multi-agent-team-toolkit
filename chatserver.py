@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lightweight web UI for the team chatroom."""
-
 import cgi
+import html
 import http.server
 import imghdr
 import json
@@ -12,10 +12,9 @@ import uuid
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("CHATSERVER_PORT", 9091))
 BIND_ADDR = os.environ.get("CHATSERVER_BIND", "127.0.0.1")
-MAX_JSON_BYTES = int(os.environ.get("CHATSERVER_MAX_JSON_BYTES", 262144))
-MAX_UPLOAD_BYTES = int(os.environ.get("CHATSERVER_MAX_UPLOAD_BYTES", 8 * 1024 * 1024))
 CHATROOM = os.path.join(SCRIPT_DIR, "chatroom.md")
 ARCHIVE = os.path.join(SCRIPT_DIR, "chatroom_archive.md")
+PROPOSAL = os.path.join(SCRIPT_DIR, "proposal.md")
 UPLOADS_DIR = os.path.join(SCRIPT_DIR, "uploads")
 CHAT_SCRIPT = os.path.join(SCRIPT_DIR, "chat")
 SEND_SCRIPT = os.path.join(SCRIPT_DIR, "send")
@@ -28,8 +27,8 @@ def _read_team_conf():
     conf = {}
     conf_path = os.path.join(SCRIPT_DIR, "team.conf")
     if os.path.exists(conf_path):
-        with open(conf_path, encoding="utf-8") as handle:
-            for line in handle:
+        with open(conf_path, encoding="utf-8") as f:
+            for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     key, val = line.split("=", 1)
@@ -45,6 +44,7 @@ HTML = r"""<!DOCTYPE html>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+
   header { background: #16213e; padding: 12px 20px; border-bottom: 1px solid #0f3460; display: flex; justify-content: space-between; align-items: center; }
   header h1 { font-size: 16px; color: #e94560; }
   header .status { font-size: 12px; color: #888; }
@@ -52,6 +52,7 @@ HTML = r"""<!DOCTYPE html>
   .tab { padding: 6px 12px; cursor: pointer; border-radius: 4px 4px 0 0; font-size: 12px; }
   .tab.active { background: #1a1a2e; color: #e94560; }
   .tab:not(.active) { background: #0f3460; color: #888; }
+
   #chat { flex: 1; overflow-y: auto; padding: 16px 20px; }
   .msg { margin-bottom: 12px; line-height: 1.5; }
   .msg strong { color: #e94560; }
@@ -63,6 +64,7 @@ HTML = r"""<!DOCTYPE html>
   .msg .ts { color: #666; font-size: 11px; }
   .msg img { max-width: 100%; max-height: 420px; border-radius: 8px; margin-top: 8px; border: 1px solid #333; display: block; }
   .separator { border-top: 1px solid #333; margin: 16px 0; padding-top: 8px; color: #555; font-size: 12px; }
+
   #input-area { background: #16213e; padding: 12px 20px; border-top: 1px solid #0f3460; display: flex; flex-direction: column; gap: 8px; }
   #composer-row { display: flex; gap: 8px; align-items: center; }
   #msg-input { flex: 1; background: #0f3460; border: 1px solid #333; color: #e0e0e0; padding: 10px 14px; border-radius: 6px; font-size: 14px; font-family: inherit; }
@@ -87,8 +89,10 @@ HTML = r"""<!DOCTYPE html>
   <div class="tab-bar">
     <div class="tab active" onclick="switchTab('live')">Live</div>
     <div class="tab" onclick="switchTab('archive')">Archive</div>
+    <div class="tab" onclick="switchTab('proposal')">Proposal</div>
   </div>
   <div class="status" id="status">Connecting...</div>
+  <div class="status" id="tmux-info" style="font-size:11px;color:#888;"></div>
 </header>
 <div id="chat"></div>
 <div id="input-area">
@@ -116,6 +120,18 @@ HTML = r"""<!DOCTYPE html>
 let currentTab = 'live';
 let lastContent = '';
 let pendingImage = null;
+
+function applyDeliveryStatus(data) {
+  const delivered = (data.delivered_targets || []).join(', ');
+  const failed = (data.failed_targets || []).map(item => item.target).join(', ');
+  if (data.partial) {
+    let text = delivered ? `Partial delivery: ${delivered}` : 'Saved to chatroom only';
+    if (failed) text += `; skipped ${failed}`;
+    document.getElementById('status').textContent = text;
+  } else if (delivered) {
+    document.getElementById('status').textContent = `Delivered: ${delivered}`;
+  }
+}
 
 function colorName(name) {
   const n = name.toLowerCase();
@@ -183,7 +199,10 @@ function currentTabLabel() {
 
 async function refresh() {
   try {
-    const endpoint = currentTab === 'archive' ? '/api/archive' : '/api/chat';
+    let endpoint = '/api/chat';
+    if (currentTab === 'archive') endpoint = '/api/archive';
+    if (currentTab === 'proposal') endpoint = '/api/proposal';
+
     const r = await fetch(endpoint);
     const data = await r.json();
     if (data.content !== lastContent) {
@@ -252,12 +271,16 @@ async function sendMsg() {
     formData.append('name', name);
     formData.append('message', msg);
     document.getElementById('status').textContent = 'Uploading image...';
-    const r = await fetch('/api/upload', { method: 'POST', body: formData });
+    const r = await fetch('/api/upload', {
+      method: 'POST',
+      body: formData
+    });
     const data = await r.json();
     if (!data.ok) {
       alert("Upload failed: " + (data.error || "unknown error"));
       return;
     }
+    applyDeliveryStatus(data);
     input.value = '';
     clearPendingImage();
     setTimeout(refresh, 500);
@@ -274,6 +297,7 @@ async function sendMsg() {
   if (!data.ok) {
     alert("Error sending message: " + (data.error || "unknown error"));
   }
+  applyDeliveryStatus(data);
   setTimeout(refresh, 500);
 }
 
@@ -308,6 +332,12 @@ fetch('/api/agents').then(r => r.json()).then(data => {
   }
 });
 
+fetch('/api/tmux').then(r => r.json()).then(data => {
+  const el = document.getElementById('tmux-info');
+  const paneStr = Object.entries(data.panes || {}).map(([p, name]) => `${name}:${p}`).join(' | ');
+  el.textContent = `tmux ${data.target} [ ${paneStr} ]`;
+});
+
 setInterval(refresh, 2000);
 refresh();
 </script>
@@ -316,23 +346,46 @@ refresh();
 
 
 class ChatHandler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
+    def log_message(self, format, *args):
         pass
 
     def do_GET(self):
         if self.path == "/":
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", "text/html")
             self.end_headers()
-            self.wfile.write(HTML.encode("utf-8"))
+            self.wfile.write(HTML.encode())
         elif self.path == "/api/chat":
             self._serve_file(CHATROOM)
         elif self.path == "/api/archive":
             self._serve_file(ARCHIVE)
+        elif self.path == "/api/proposal":
+            self._serve_file(PROPOSAL)
         elif self.path == "/api/agents":
             conf = _read_team_conf()
             agents = [v for k, v in sorted(conf.items()) if k.startswith("AGENT_")]
             self._send_json({"agents": agents})
+        elif self.path == "/api/tmux":
+            conf = _read_team_conf()
+            target = conf.get("TMUX_TARGET", "unknown")
+            panes = {}
+            for k, v in sorted(conf.items()):
+                if k.startswith("PANE_") and not k.startswith("PANE_LIST"):
+                    agent_key = "AGENT_" + k[5:]
+                    agent_name = conf.get(agent_key, k[5:])
+                    panes[v] = agent_name
+            self._send_json({"target": target, "panes": panes})
+        elif self.path == "/raw/devpost_story.md":
+            story_path = os.path.join(SCRIPT_DIR, "devpost_story.md")
+            try:
+                with open(story_path, "r") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(content.encode())
+            except FileNotFoundError:
+                self.send_error(404)
         elif self.path.startswith("/uploads/"):
             filename = os.path.basename(self.path[len("/uploads/"):])
             self._serve_static(os.path.join(UPLOADS_DIR, filename))
@@ -341,99 +394,114 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/send":
-            length = int(self.headers.get("Content-Length", "0") or 0)
-            if length <= 0 or length > MAX_JSON_BYTES:
-                self._send_json({"ok": False, "error": "Invalid request size"}, 400)
-                return
-            try:
-                body = json.loads(self.rfile.read(length))
-            except json.JSONDecodeError:
-                self._send_json({"ok": False, "error": "Invalid JSON"}, 400)
-                return
-            name = str(body.get("name", "User"))
-            message = str(body.get("message", ""))
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            name = body.get("name", "User")
+            message = body.get("message", "")
             self._process_message(name, message)
         elif self.path == "/api/upload":
-            self._handle_upload()
+            ctype, pdict = cgi.parse_header(self.headers.get("Content-Type"))
+            if ctype != "multipart/form-data":
+                self._send_json({"ok": False, "error": "Expected multipart/form-data"}, 400)
+                return
+
+            pdict["boundary"] = pdict["boundary"].encode()
+            fields = cgi.parse_multipart(self.rfile, pdict)
+            image_items = fields.get("image")
+            if not image_items:
+                self._send_json({"ok": False, "error": "No image uploaded"}, 400)
+                return
+
+            image_data = image_items[0]
+            name = fields.get("name", ["User"])[0]
+            message = fields.get("message", [""])[0]
+            if isinstance(name, bytes):
+                name = name.decode("utf-8")
+            if isinstance(message, bytes):
+                message = message.decode("utf-8")
+
+            image_kind = imghdr.what(None, image_data)
+            ext = {
+                "jpeg": "jpg",
+                "png": "png",
+                "gif": "gif",
+                "webp": "webp",
+            }.get(image_kind)
+            if ext is None:
+                self._send_json({"ok": False, "error": "Unsupported image format"}, 400)
+                return
+
+            filename = f"ss_{uuid.uuid4().hex[:8]}.{ext}"
+            filepath = os.path.join(UPLOADS_DIR, filename)
+            with open(filepath, "wb") as f:
+                f.write(image_data)
+
+            image_markup = f"![screenshot](uploads/{filename})"
+            combined_message = image_markup if not message else f"{message} {image_markup}"
+            self._process_message(name, combined_message)
         else:
             self.send_error(404)
 
-    def _handle_upload(self):
-        length = int(self.headers.get("Content-Length", "0") or 0)
-        if length <= 0:
-            self._send_json({"ok": False, "error": "Empty upload"}, 400)
-            return
-        if length > MAX_UPLOAD_BYTES:
-            self._send_json({"ok": False, "error": "Upload exceeds size limit"}, 413)
-            return
-
-        ctype, pdict = cgi.parse_header(self.headers.get("Content-Type", ""))
-        if ctype != "multipart/form-data" or "boundary" not in pdict:
-            self._send_json({"ok": False, "error": "Expected multipart/form-data"}, 400)
-            return
-
-        pdict["boundary"] = pdict["boundary"].encode()
-        fields = cgi.parse_multipart(self.rfile, pdict)
-        image_items = fields.get("image")
-        if not image_items:
-            self._send_json({"ok": False, "error": "No image uploaded"}, 400)
-            return
-
-        image_data = image_items[0]
-        name = fields.get("name", ["User"])[0]
-        message = fields.get("message", [""])[0]
-        if isinstance(name, bytes):
-            name = name.decode("utf-8", "replace")
-        if isinstance(message, bytes):
-            message = message.decode("utf-8", "replace")
-
-        image_kind = imghdr.what(None, image_data)
-        ext = {
-            "jpeg": "jpg",
-            "png": "png",
-            "gif": "gif",
-            "webp": "webp",
-        }.get(image_kind)
-        if ext is None:
-            self._send_json({"ok": False, "error": "Unsupported image format"}, 400)
-            return
-
-        filename = f"ss_{uuid.uuid4().hex[:8]}.{ext}"
-        filepath = os.path.join(UPLOADS_DIR, filename)
-        with open(filepath, "wb") as handle:
-            handle.write(image_data)
-
-        image_markup = f"![screenshot](uploads/{filename})"
-        combined_message = image_markup if not message else f"{message} {image_markup}"
-        self._process_message(str(name), combined_message)
-
     def _process_message(self, name, message):
         error = None
+        delivered_targets = []
+        failed_targets = []
+        # Pass our own TMUX environment to the scripts so they can detect our location.
+        env = os.environ.copy()
         if message:
-            res = subprocess.run([CHAT_SCRIPT, name, message], capture_output=True, text=True, check=False)
+            res = subprocess.run([CHAT_SCRIPT, name, message], capture_output=True, text=True, env=env)
             if res.returncode != 0:
-                error = f"Chat script failed: {res.stderr.strip()}"
+                error = f"Chat script failed: {res.stderr}"
 
             if not error and name == "User":
-                res = subprocess.run(
-                    [SEND_SCRIPT, "--all", f"[{name}]: {message}"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if res.returncode != 0:
-                    detail = res.stderr.strip() or res.stdout.strip()
-                    error = f"Send script failed: {detail}"
+                conf = _read_team_conf()
+                panes = self._pane_list(conf)
+                for pane in panes:
+                    target = self._format_target(conf, pane)
+                    res = subprocess.run(
+                        [SEND_SCRIPT, "--no-log", "--from", name, pane, message],
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                    )
+                    if res.returncode == 0:
+                        delivered_targets.append(target)
+                    else:
+                        detail = res.stderr.strip() or res.stdout.strip()
+                        failed_targets.append({"target": target, "error": detail})
 
         if error:
             self._send_json({"ok": False, "error": error}, 500)
+        elif failed_targets:
+            self._send_json(
+                {
+                    "ok": True,
+                    "partial": True,
+                    "delivered_targets": delivered_targets,
+                    "failed_targets": failed_targets,
+                },
+                200,
+            )
         else:
-            self._send_json({"ok": True}, 200)
+            payload = {"ok": True}
+            if delivered_targets:
+                payload["delivered_targets"] = delivered_targets
+            self._send_json(payload, 200)
+
+    def _pane_list(self, conf):
+        pane_list = conf.get("PANE_LIST", "").strip()
+        if pane_list:
+            return pane_list.split()
+        return [v for k, v in sorted(conf.items()) if k.startswith("PANE_")]
+
+    def _format_target(self, conf, pane):
+        tmux_target = conf.get("TMUX_TARGET", "?")
+        return f"{tmux_target}.{pane}"
 
     def _serve_file(self, path):
         try:
-            with open(path, "r", encoding="utf-8") as handle:
-                content = handle.read()
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
         except FileNotFoundError:
             content = "(empty)"
         self._send_json({"content": content})
@@ -455,17 +523,17 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.end_headers()
-        with open(path, "rb") as handle:
-            self.wfile.write(handle.read())
+        with open(path, "rb") as f:
+            self.wfile.write(f.read())
 
     def _send_json(self, payload, status=200):
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(payload).encode("utf-8"))
+        self.wfile.write(json.dumps(payload).encode())
 
 
 if __name__ == "__main__":
-    server = http.server.ThreadingHTTPServer((BIND_ADDR, PORT), ChatHandler)
+    server = http.server.HTTPServer((BIND_ADDR, PORT), ChatHandler)
     print(f"Team Chat running at http://{BIND_ADDR}:{PORT}")
     server.serve_forever()

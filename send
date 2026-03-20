@@ -13,10 +13,22 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/team.conf"
 
 FROM=""
-if [ "$1" = "--from" ]; then
-  FROM="$2"
-  shift 2
-fi
+NO_LOG=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --from)
+      FROM="$2"
+      shift 2
+      ;;
+    --no-log)
+      NO_LOG=1
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 TARGET_PANES="${1:-}"
 shift || true
@@ -31,17 +43,47 @@ fi
 TEAM_PANES="${PANE_LIST:-$PANE_CLAUDE $PANE_GEMINI $PANE_CODEX}"
 CURRENT_TARGET=""
 CURRENT_PANE=""
+CURRENT_SESSION=""
 if [ -n "$TMUX" ]; then
-  CURRENT_TARGET=$(tmux display-message -p '#S:#I' 2>/dev/null || true)
-  CURRENT_PANE=$(tmux display-message -p '#P' 2>/dev/null || true)
+  # Use -t "$TMUX_PANE" to ensure we detect the ACTUAL pane we are in,
+  # not just the 'active' pane in the window.
+  CURRENT_TARGET=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I' 2>/dev/null || true)
+  CURRENT_PANE=$(tmux display-message -t "$TMUX_PANE" -p '#{pane_index}' 2>/dev/null || true)
+  CURRENT_SESSION=$(tmux display-message -t "$TMUX_PANE" -p '#S' 2>/dev/null || true)
 fi
 
-# Resolve --all to all teammates in the configured window, excluding the
-# current pane when the script is launched from inside that same tmux target.
+# Determine the effective target window:
+# 1. Use TMUX_TARGET from team.conf as the source of truth if set and not "auto".
+# 2. If TMUX_TARGET is "auto", "current", or unset, use the current tmux window.
+EFFECTIVE_TARGET="$TMUX_TARGET"
+if [ "$TMUX_TARGET" = "auto" ] || [ "$TMUX_TARGET" = "current" ] || [ -z "$TMUX_TARGET" ]; then
+  if [ -n "$CURRENT_TARGET" ]; then
+    EFFECTIVE_TARGET="$CURRENT_TARGET"
+  fi
+fi
+
+if [ -z "$EFFECTIVE_TARGET" ]; then
+  echo "ERROR: TMUX_TARGET is not set in team.conf and not inside a tmux session." >&2
+  exit 1
+fi
+
+# Prepend tmux info to the sender name if we are inside tmux.
+if [ -n "$FROM" ] && [ -n "$CURRENT_SESSION" ] && [ -n "$CURRENT_PANE" ]; then
+  # Format: "Name (session:pane)" e.g. "User (2:0.1)"
+  FROM="$FROM ($CURRENT_SESSION:$CURRENT_PANE)"
+fi
+
+# Safety check: Warn if we are sending to a different window than the one we are in.
+if [ -n "$CURRENT_TARGET" ] && [ "$CURRENT_TARGET" != "$EFFECTIVE_TARGET" ]; then
+  echo "WARNING: Sending to target window $EFFECTIVE_TARGET while in $CURRENT_TARGET." >&2
+fi
+
+# Resolve --all to all teammates in the effective window, excluding the
+# current pane if we are sending from within that same window.
 if [ "$TARGET_PANES" = "--all" ]; then
   TARGET_PANES=""
   for pane in $TEAM_PANES; do
-    if [ -n "$CURRENT_PANE" ] && [ "$CURRENT_TARGET" = "$TMUX_TARGET" ] && [ "$pane" = "$CURRENT_PANE" ]; then
+    if [ -n "$CURRENT_PANE" ] && [ "$CURRENT_TARGET" = "$EFFECTIVE_TARGET" ] && [ "$pane" = "$CURRENT_PANE" ]; then
       continue
     fi
     TARGET_PANES="${TARGET_PANES:+$TARGET_PANES,}$pane"
@@ -49,16 +91,33 @@ if [ "$TARGET_PANES" = "--all" ]; then
 fi
 
 if [ -z "$TARGET_PANES" ]; then
-  echo "ERROR: No recipient panes resolved." >&2
+  echo "ERROR: No recipient panes resolved for target $EFFECTIVE_TARGET." >&2
   exit 1
 fi
+
+format_target_id() {
+  printf '%s.%s' "$EFFECTIVE_TARGET" "$1"
+}
+
+format_target_list() {
+  local panes_csv="$1"
+  local out=""
+  local pane
+  IFS=',' read -ra LIST <<< "$panes_csv"
+  for pane in "${LIST[@]}"; do
+    pane=$(echo "$pane" | xargs)
+    [ -z "$pane" ] && continue
+    out="${out:+$out,}$(format_target_id "$pane")"
+  done
+  printf '%s' "$out"
+}
 
 # Function to send to a single pane
 send_to_pane() {
   local p="$1"
   local msg="$2"
   local from="$3"
-  local target="$TMUX_TARGET.$p"
+  local target="$EFFECTIVE_TARGET.$p"
   local bufname="send_${$}_${p}"
 
   # Prefix with sender name if provided
@@ -71,7 +130,7 @@ send_to_pane() {
   fi
 
   gemini_shell_mode_active() {
-    tmux capture-pane -t "$target" -p 2>/dev/null | tail -n 10 | grep -Eq '(shell mode enabled|^[[:space:]]*![[:space:]].*Type your shell command)'
+    tmux capture-pane -t "$target" -p 2>/dev/null | tail -n 10 | grep -Eq '(shell mode enabled|^[[:space:]]*![[:space:]].*Type your shell command|^[[:space:]]*![[:space:]]*$)'
   }
 
   gemini_chat_mode_active() {
@@ -105,7 +164,7 @@ send_to_pane() {
     return 0
   }
 
-  if [ "$p" = "${GEMINI_PANE:-$PANE_GEMINI}" ]; then
+  if [ "$p" = "$GEMINI_PANE" ]; then
     reset_gemini_input || return 1
     tmux send-keys -t "$target" -l "$display_msg" || return 1
     sleep 0.3
@@ -137,22 +196,25 @@ SEND_OK=1
   }
 
   if [ "$SEND_OK" -eq 1 ]; then
-    IFS=',' read -ra ADDR <<< "$TARGET_PANES"
-    for p in "${ADDR[@]}"; do
-      p=$(echo "$p" | xargs)
-      [ -z "$p" ] && continue
-      echo "Sending to pane $p..."
-      if ! send_to_pane "$p" "$MSG" "$FROM"; then
-        SEND_OK=0
-        FAILED_PANES="${FAILED_PANES:+$FAILED_PANES,}$p"
-        echo "ERROR: Failed to send to pane $p" >&2
-      else
-        SENT_PANES="${SENT_PANES:+$SENT_PANES,}$p"
-      fi
-    done
+  # Split comma-separated panes
+  IFS=',' read -ra ADDR <<< "$TARGET_PANES"
+  for p in "${ADDR[@]}"; do
+    # Trim whitespace
+    p=$(echo "$p" | xargs)
+    [ -z "$p" ] && continue
+    echo "Sending to pane $p..."
+    if ! send_to_pane "$p" "$MSG" "$FROM"; then
+      SEND_OK=0
+      FAILED_PANES="${FAILED_PANES:+$FAILED_PANES,}$p"
+      echo "ERROR: Failed to send to pane $p" >&2
+    else
+      SENT_PANES="${SENT_PANES:+$SENT_PANES,}$p"
+    fi
+  done
 
-    if [ -n "$FROM" ] && [ -n "$SENT_PANES" ]; then
-      "$SCRIPT_DIR/chat" "$FROM" "(to $SENT_PANES) $MSG" >/dev/null || SEND_OK=0
+    if [ "$NO_LOG" -ne 1 ] && [ -n "$FROM" ] && [ -n "$SENT_PANES" ]; then
+      LOGGED_TARGETS=$(format_target_list "$SENT_PANES")
+      "$SCRIPT_DIR/chat" "$FROM" "(to $LOGGED_TARGETS) $MSG" >/dev/null || SEND_OK=0
     fi
   fi
 } 200>"$LOCKFILE"
@@ -162,4 +224,4 @@ if [ "$SEND_OK" -ne 1 ]; then
   exit 1
 fi
 
-echo "Sent to panes $SENT_PANES"
+echo "Sent to targets $(format_target_list "$SENT_PANES")"

@@ -4,7 +4,7 @@
 # Example: ./chat Claude "Hey team, check the chatroom!"
 # Example: ./chat --sync Gemini "I've updated the config."
 #
-# --sync automatically calls ./send --all <message> to notify teammate panes.
+# --sync automatically calls ./send --all <message> to notify all panes.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
@@ -30,6 +30,15 @@ if [ -z "$MSG" ]; then
   exit 1
 fi
 
+# Prepend tmux info to the name if we are inside tmux.
+if [ -n "$TMUX" ]; then
+  CURRENT_SESSION=$(tmux display-message -p '#S' 2>/dev/null || true)
+  CURRENT_PANE=$(tmux display-message -p '#P' 2>/dev/null || true)
+  if [ -n "$CURRENT_SESSION" ] && [ "$CURRENT_PANE" != "" ]; then
+    NAME="$NAME ($CURRENT_SESSION:$CURRENT_PANE)"
+  fi
+fi
+
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 PREVIEW=$(printf '%s' "$MSG" | head -c 80)
 
@@ -44,18 +53,28 @@ if ! (
   exit 1
 fi
 
+# Determine the effective target window for notifications:
+# 1. Use TMUX_TARGET from team.conf if set and not "auto".
+# 2. If TMUX_TARGET is "auto", "current", or unset, use current tmux window.
+EFFECTIVE_TARGET="$TMUX_TARGET"
+if [ "$TMUX_TARGET" = "auto" ] || [ "$TMUX_TARGET" = "current" ] || [ -z "$TMUX_TARGET" ]; then
+  if [ -n "$TMUX" ]; then
+    EFFECTIVE_TARGET=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I' 2>/dev/null || echo "$TMUX_TARGET")
+  fi
+fi
+
 # Notify all panes via tmux display-message (ephemeral)
 NOTIFY_FAILED=0
 for pane in $TEAM_PANES; do
-  if ! tmux display-message -t "$TMUX_TARGET.$pane" "[$NAME]: $PREVIEW" 2>/dev/null; then
+  if ! tmux display-message -t "$EFFECTIVE_TARGET.$pane" "[$NAME]: $PREVIEW" 2>/dev/null; then
     NOTIFY_FAILED=1
   fi
 done
 
 # If --sync is requested, call send --all (persistent notification to CLI input)
 if [ "$SYNC" -eq 1 ]; then
-  # We don't use --from here because 'send' itself logs to chatroom if --from
-  # is used, which would create duplicate entries.
+  # We don't use --from here because 'send' itself will log to chatroom if --from is used,
+  # causing duplicate entries. We just want the direct message delivery.
   if ! "$SCRIPT_DIR/send" --all "[$NAME]: $MSG" >/dev/null; then
     echo "ERROR: Sync delivery failed." >&2
     exit 1
