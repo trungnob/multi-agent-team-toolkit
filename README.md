@@ -27,11 +27,12 @@ This toolkit transforms your terminal into a high-bandwidth mission control, bre
 |------|-------------|
 | `team.conf` | Central configuration — tmux target, pane mapping, agent names |
 | `chat` | Post a message to the shared chatroom + notify all panes |
-| `send` | Type a message directly into a teammate's CLI input |
+| `send` | Type a message directly into one pane or broadcast to all teammate panes |
 | `notify` | Send an ephemeral tmux notification to a pane |
+| `recruit` | Create or recover the 3-pane team layout from the current tmux window |
 | `archive` | Move old chatroom messages to `chatroom_archive.md` |
 | `chat-daemon` | Background daemon that auto-archives every N minutes |
-| `chatserver.py` | Web UI for the chatroom (live view, archive, send messages) |
+| `chatserver.py` | Web UI for the chatroom (live view, archive, send messages, screenshots) |
 | `.claude/skills/hackathon/` | Claude Code skill for team coordination |
 | `TEAM_TOOLS.md` | Full reference doc for all tools |
 
@@ -69,7 +70,7 @@ tmux attach -t myteam
 ### 3. Make scripts executable and initialize
 
 ```bash
-chmod +x chat send notify archive chat-daemon
+chmod +x chat send notify recruit archive chat-daemon
 touch chatroom.md
 ```
 
@@ -79,11 +80,20 @@ touch chatroom.md
 # Post to the team chatroom
 ./chat Claude "I've finished the auth module, ready for review"
 
+# Post and also type into teammate panes
+./chat --sync Claude "Please check the chatroom for the latest plan"
+
 # Send a direct message to Gemini (pane 1)
 ./send --from Claude 1 "Can you review the auth module?"
 
+# Broadcast to all teammate panes except your current one
+./send --from Claude --all "Quick status check."
+
 # Quick ping to Codex (pane 2)
 ./notify 2 "Check the chatroom!"
+
+# Recover the standard 3-agent layout from your current pane
+./recruit --as Claude
 
 # Archive old messages
 ./archive --dry-run
@@ -112,6 +122,7 @@ If you're using Claude Code, the `/hackathon` skill provides shortcuts:
 
 ```
 /hackathon chat "message"       # post + notify all teammates
+/hackathon recruit              # recover teammates into this tmux window
 /hackathon send 1 "message"     # direct message to pane 1
 /hackathon read                 # summarize recent chatroom
 /hackathon status               # check what all agents are doing
@@ -134,7 +145,7 @@ Lock filenames are derived from a hash of the full project path, so multiple clo
 
 ### Reliable tmux Message Delivery
 
-Direct messages use tmux `load-buffer` + `paste-buffer` instead of raw `send-keys`. This matters because `send-keys` can mis-handle quoting and special characters, especially with JSON, shell metacharacters, or punctuation.
+Direct messages use tmux `load-buffer` + `paste-buffer` by default instead of raw `send-keys`. This preserves exact message text, including punctuation and shell metacharacters, without relying on shell-style escaping.
 
 The `./send` flow:
 
@@ -144,7 +155,7 @@ The `./send` flow:
 4. Clean up the temporary buffer
 5. Press Enter to submit
 
-For Gemini CLI specifically, the script sends an `Escape` key first to exit shell mode before pasting.
+Gemini CLI is the exception. The script first checks whether Gemini is visibly in `!` shell mode. If so, it sends one `Escape`, then a second only if shell mode is still visible. After that it uses `send-keys -l` to type the message literally, because Gemini can misinterpret pasted input while shell mode is active.
 
 ### Chatroom and Archiving
 
@@ -158,7 +169,7 @@ For Gemini CLI specifically, the script sends an `Escape` key first to exit shel
 
 ### Web UI
 
-`chatserver.py` is a lightweight Python HTTP server that reads the same chatroom files and shells out to the same `./chat` and `./send` scripts. No duplicate logic — the web UI follows identical locking, formatting, and delivery behavior as the CLI tools.
+`chatserver.py` is a lightweight Python HTTP server that reads the same chatroom files and shells out to the same `./chat` and `./send` scripts. The web UI supports live chat, archive viewing, inline screenshot rendering, and image uploads via paste or file picker.
 
 ## Security
 
@@ -169,6 +180,10 @@ The web server binds to `127.0.0.1` by default. The `/api/send` endpoint can for
 ### XSS Protection
 
 All chat content is escaped via `textContent` before DOM insertion. Raw HTML in messages is rendered as text, not executed.
+
+### Upload Limits
+
+Screenshot uploads are limited to common image formats and capped to `CHATSERVER_MAX_UPLOAD_BYTES` (8 MB by default) to reduce accidental memory abuse in the local web UI.
 
 ### Error Propagation
 

@@ -11,6 +11,8 @@ Coordinate a team of AI coding agents running in parallel tmux panes with a shar
 
 All agent names, pane numbers, and tmux targets are defined in `team.conf` at the project root. Read it before any operation that references panes or agent names.
 
+`team.conf` is the source of truth. Never hardcode a tmux session like `1:0`, and never assume another project's repo path. Resolve commands relative to the current project root.
+
 ## Commands
 
 Based on the argument provided by the user ($ARGUMENTS), execute one of the following:
@@ -30,6 +32,11 @@ Type a message directly into one teammate's CLI input:
 ./send --from <YourName> <pane> "<message>"
 ```
 The `--from` flag prefixes the message with the sender's name so the receiver knows who sent it.
+
+For a broadcast to all teammate panes in the current tmux target:
+```
+./send --from <YourName> --all "<message>"
+```
 
 ### `notify <pane> <message>` — Ephemeral ping
 
@@ -54,6 +61,15 @@ tmux capture-pane -t "<target>.<pane>" -p | tail -20
 1. Read chatroom
 2. Capture all teammate panes
 3. Post a status update via `chat`
+
+### `recruit` — Rebuild the team layout
+
+Ensure the current tmux window has the standard 3-agent layout and launch any
+missing teammates:
+```
+./recruit --as Claude
+./recruit --as Gemini --force
+```
 
 ### `help` (or no argument) — Show available commands
 

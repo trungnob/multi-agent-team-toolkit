@@ -1,13 +1,21 @@
 #!/bin/bash
 # Team chatroom helper - posts a message and notifies other tmux panes
-# Usage: ./chat <name> <message>
+# Usage: ./chat [--sync] <name> <message>
 # Example: ./chat Claude "Hey team, check the chatroom!"
+# Example: ./chat --sync Gemini "I've updated the config."
 #
-# Uses flock to serialize writes to chatroom.md (prevents race conditions)
+# --sync automatically calls ./send --all <message> to notify teammate panes.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
 source "$SCRIPT_DIR/team.conf"
+TEAM_PANES="${PANE_LIST:-$PANE_CLAUDE $PANE_GEMINI $PANE_CODEX}"
+
+SYNC=0
+if [ "$1" = "--sync" ]; then
+  SYNC=1
+  shift
+fi
 
 CHATROOM="$SCRIPT_DIR/chatroom.md"
 PROJECT_HASH=$(printf "%s" "$SCRIPT_DIR" | md5sum | cut -c1-8)
@@ -17,8 +25,8 @@ shift
 MSG="$*"
 
 if [ -z "$MSG" ]; then
-  echo "Usage: ./chat <name> <message>"
-  echo "  e.g. ./chat Claude 'Hey team, check the chatroom!'"
+  echo "Usage: ./chat [--sync] <name> <message>"
+  echo "  e.g. ./chat --sync Claude 'Hey team, check the chatroom!'"
   exit 1
 fi
 
@@ -36,13 +44,23 @@ if ! (
   exit 1
 fi
 
-# Notify all panes in the configured tmux target
+# Notify all panes via tmux display-message (ephemeral)
 NOTIFY_FAILED=0
-for pane in $PANE_CLAUDE $PANE_GEMINI $PANE_CODEX; do
+for pane in $TEAM_PANES; do
   if ! tmux display-message -t "$TMUX_TARGET.$pane" "[$NAME]: $PREVIEW" 2>/dev/null; then
     NOTIFY_FAILED=1
   fi
 done
+
+# If --sync is requested, call send --all (persistent notification to CLI input)
+if [ "$SYNC" -eq 1 ]; then
+  # We don't use --from here because 'send' itself logs to chatroom if --from
+  # is used, which would create duplicate entries.
+  if ! "$SCRIPT_DIR/send" --all "[$NAME]: $MSG" >/dev/null; then
+    echo "ERROR: Sync delivery failed." >&2
+    exit 1
+  fi
+fi
 
 if [ "$NOTIFY_FAILED" -eq 0 ]; then
   echo "Posted to chatroom and notified team."

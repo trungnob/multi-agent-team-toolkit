@@ -1,14 +1,12 @@
 #!/bin/bash
-# Send a message to a teammate's tmux pane as a proper prompt input
-# Usage: ./send [--from <name>] <pane> <message>
-# Pane numbers are configured in team.conf
+# Send a message to one or more teammate tmux panes as proper prompt input
+# Usage: ./send [--from <name>] <pane|--all> <message>
+# Example: ./send --all "Status check, everyone!"
+# Example: ./send 0,2 "Reviewing my changes now."
 #
 # Uses flock to serialize tmux buffer access (prevents race conditions).
 # Uses a named tmux buffer unique to this PID as extra safety.
-# When --from is provided, the message is prefixed with "[<name>]: " so the
-# receiving agent knows who sent it.
-# For best results, the target pane should be at its agent prompt rather than
-# inside a nested shell.
+# When --from is provided, the message is prefixed with "[<name>]: "
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
@@ -20,60 +18,126 @@ if [ "$1" = "--from" ]; then
   shift 2
 fi
 
-PANE="${1:-0}"
-shift
+TARGET_PANES="${1:-}"
+shift || true
 MSG="$*"
 
-if [ -z "$MSG" ]; then
-  echo "Usage: ./send [--from <name>] <pane> <message>"
+if [ -z "$MSG" ] || [ -z "$TARGET_PANES" ]; then
+  echo "Usage: ./send [--from <name>] <pane|--all> <message>"
   echo "  Panes: ${PANE_CLAUDE}=${AGENT_CLAUDE}, ${PANE_GEMINI}=${AGENT_GEMINI}, ${PANE_CODEX}=${AGENT_CODEX}"
   exit 1
 fi
 
-# Prefix with sender name if provided
-if [ -n "$FROM" ]; then
-  MSG="[$FROM]: $MSG"
+TEAM_PANES="${PANE_LIST:-$PANE_CLAUDE $PANE_GEMINI $PANE_CODEX}"
+CURRENT_TARGET=""
+CURRENT_PANE=""
+if [ -n "$TMUX" ]; then
+  CURRENT_TARGET=$(tmux display-message -p '#S:#I' 2>/dev/null || true)
+  CURRENT_PANE=$(tmux display-message -p '#P' 2>/dev/null || true)
 fi
 
-TARGET="$TMUX_TARGET.$PANE"
-PROJECT_HASH=$(printf "%s" "$SCRIPT_DIR" | md5sum | cut -c1-8)
-LOCKFILE="/tmp/team_${PROJECT_HASH}_tmux_send.lock"
-BUFNAME="send_$$"
+# Resolve --all to all teammates in the configured window, excluding the
+# current pane when the script is launched from inside that same tmux target.
+if [ "$TARGET_PANES" = "--all" ]; then
+  TARGET_PANES=""
+  for pane in $TEAM_PANES; do
+    if [ -n "$CURRENT_PANE" ] && [ "$CURRENT_TARGET" = "$TMUX_TARGET" ] && [ "$pane" = "$CURRENT_PANE" ]; then
+      continue
+    fi
+    TARGET_PANES="${TARGET_PANES:+$TARGET_PANES,}$pane"
+  done
+fi
 
-cleanup_buffer() {
-  tmux delete-buffer -b "$BUFNAME" 2>/dev/null || true
-}
-
-# Acquire exclusive lock for tmux buffer + paste operation
-if ! (
-  flock -w 10 200 || { echo "ERROR: Could not acquire tmux send lock"; exit 1; }
-  trap cleanup_buffer EXIT
-
-  # For Gemini pane: send Escape first in case it is currently in shell mode.
-  if [ "$PANE" = "$PANE_GEMINI" ]; then
-    tmux send-keys -t "$TARGET" Escape || { echo "ERROR: Failed to send Escape to pane $PANE" >&2; exit 1; }
-    sleep 1
-  fi
-
-  # Use a named buffer (unique per PID) to avoid clobbering the global buffer
-  printf '%s' "$MSG" | tmux load-buffer -b "$BUFNAME" - || {
-    echo "ERROR: Failed to load tmux buffer" >&2
-    exit 1
-  }
-  tmux paste-buffer -b "$BUFNAME" -t "$TARGET" || {
-    echo "ERROR: Failed to paste buffer into pane $PANE" >&2
-    exit 1
-  }
-  cleanup_buffer
-
-  # Small delay then send Enter to submit
-  sleep 0.5
-  tmux send-keys -t "$TARGET" Enter || {
-    echo "ERROR: Failed to press Enter in pane $PANE" >&2
-    exit 1
-  }
-) 200>"$LOCKFILE"; then
+if [ -z "$TARGET_PANES" ]; then
+  echo "ERROR: No recipient panes resolved." >&2
   exit 1
 fi
 
-echo "Sent to pane $PANE"
+# Function to send to a single pane
+send_to_pane() {
+  local p="$1"
+  local msg="$2"
+  local from="$3"
+  local target="$TMUX_TARGET.$p"
+  local bufname="send_${$}_${p}"
+
+  # Prefix with sender name if provided
+  local display_msg="$msg"
+  [ -n "$from" ] && display_msg="[$from]: $msg"
+
+  if ! tmux display-message -p -t "$target" "#{pane_id}" >/dev/null 2>&1; then
+    echo "ERROR: tmux target $target does not exist" >&2
+    return 1
+  fi
+
+  gemini_shell_mode_active() {
+    tmux capture-pane -t "$target" -p 2>/dev/null | tail -n 10 | grep -Eq '(shell mode enabled|^[[:space:]]*![[:space:]].*Type your shell command)'
+  }
+
+  reset_gemini_input() {
+    if gemini_shell_mode_active; then
+      tmux send-keys -t "$target" Escape || return 1
+      sleep 0.3
+      gemini_shell_mode_active && { tmux send-keys -t "$target" Escape; sleep 0.3; }
+    fi
+    return 0
+  }
+
+  if [ "$p" = "${GEMINI_PANE:-$PANE_GEMINI}" ]; then
+    reset_gemini_input || return 1
+    tmux send-keys -t "$target" -l "$display_msg" || return 1
+    sleep 0.3
+    tmux send-keys -t "$target" Enter || return 1
+  else
+    printf '%s' "$display_msg" | tmux load-buffer -b "$bufname" - || return 1
+    if ! tmux paste-buffer -b "$bufname" -t "$target"; then
+      tmux delete-buffer -b "$bufname" 2>/dev/null
+      return 1
+    fi
+    tmux delete-buffer -b "$bufname" 2>/dev/null
+    sleep 0.3
+    tmux send-keys -t "$target" Enter || return 1
+  fi
+  return 0
+}
+
+PROJECT_HASH=$(printf "%s" "$SCRIPT_DIR" | md5sum | cut -c1-8)
+LOCKFILE="/tmp/team_${PROJECT_HASH}_tmux_send.lock"
+FAILED_PANES=""
+SENT_PANES=""
+SEND_OK=1
+
+# Acquire exclusive lock for the whole operation (multi-pane batch)
+{
+  flock -w 20 200 || {
+    echo "ERROR: Could not acquire tmux send lock" >&2
+    SEND_OK=0
+  }
+
+  if [ "$SEND_OK" -eq 1 ]; then
+    IFS=',' read -ra ADDR <<< "$TARGET_PANES"
+    for p in "${ADDR[@]}"; do
+      p=$(echo "$p" | xargs)
+      [ -z "$p" ] && continue
+      echo "Sending to pane $p..."
+      if ! send_to_pane "$p" "$MSG" "$FROM"; then
+        SEND_OK=0
+        FAILED_PANES="${FAILED_PANES:+$FAILED_PANES,}$p"
+        echo "ERROR: Failed to send to pane $p" >&2
+      else
+        SENT_PANES="${SENT_PANES:+$SENT_PANES,}$p"
+      fi
+    done
+
+    if [ -n "$FROM" ] && [ -n "$SENT_PANES" ]; then
+      "$SCRIPT_DIR/chat" "$FROM" "(to $SENT_PANES) $MSG" >/dev/null || SEND_OK=0
+    fi
+  fi
+} 200>"$LOCKFILE"
+
+if [ "$SEND_OK" -ne 1 ]; then
+  [ -n "$FAILED_PANES" ] && echo "ERROR: Failed to send to panes: $FAILED_PANES" >&2
+  exit 1
+fi
+
+echo "Sent to panes $SENT_PANES"

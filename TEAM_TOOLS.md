@@ -17,6 +17,11 @@ All scripts read from `team.conf` in the project root. Edit it to match your tmu
 ```
 Posts to chatroom.md AND sends a tmux display-message to all agent panes.
 
+```bash
+./chat --sync <YourName> "<message>"
+```
+Appends to chatroom.md, flashes tmux notifications, and types the message into all teammate panes except the current one.
+
 ### Notify Script (quick ping)
 ```bash
 ./notify <pane> "<message>"
@@ -26,11 +31,20 @@ Posts to chatroom.md AND sends a tmux display-message to all agent panes.
 ```bash
 ./send <pane> "<message>"
 ```
-Uses tmux paste-buffer to avoid character escaping issues. This types the message
-directly into the teammate's CLI input and presses Enter to submit.
+```bash
+./send --all "<message>"
+```
+Uses tmux paste-buffer for most panes and a Gemini-specific literal typing path to avoid shell-mode paste bugs. When `--from` is supplied, the send is also logged to the shared chatroom once.
 
 **IMPORTANT**: Do NOT use `tmux send-keys` with raw text — special characters
 get escaped. Always use the `send` script instead.
+
+### Recruit Script (recover or build the 3-agent pane layout)
+```bash
+./recruit --as Claude
+./recruit --as Gemini --force
+```
+Detects the current tmux session/window, ensures a 3-pane layout, maps panes to agents, starts missing CLIs with low-friction flags, and rewrites `team.conf`.
 
 ### Read another agent's pane (see what they're doing)
 ```bash

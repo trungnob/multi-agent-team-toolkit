@@ -1,0 +1,286 @@
+#!/bin/bash
+# Recruit/Summon teammate agents into the current tmux window.
+# Usage: ./recruit [--as Claude|Gemini|Codex] [--force]
+#
+# Detects the current tmux session:window, ensures a 3-pane layout, maps panes
+# to agent roles, starts missing agents with explicit low-friction flags, and
+# updates team.conf.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONF_PATH="$SCRIPT_DIR/team.conf"
+
+usage() {
+  echo "Usage: ./recruit [--as Claude|Gemini|Codex] [--force]"
+}
+
+normalize_role() {
+  case "$1" in
+    Claude|claude) echo "Claude" ;;
+    Gemini|gemini) echo "Gemini" ;;
+    Codex|codex) echo "Codex" ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_role_from_pane() {
+  local pane="$1"
+  local cmd title
+  cmd=$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null || true)
+  title=$(tmux display-message -p -t "$pane" '#{pane_title}' 2>/dev/null || true)
+  case "$cmd:$title" in
+    claude:*|*:Claude*|*:"✳ Claude Code"*) echo "Claude" ;;
+    gemini:*|*:Gemini*|*:GEMINI*) echo "Gemini" ;;
+    codex:*|*:Codex*|*:CODEX*) echo "Codex" ;;
+    *) return 1 ;;
+  esac
+}
+
+pane_command() {
+  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null || true
+}
+
+pane_title() {
+  tmux display-message -p -t "$1" '#{pane_title}' 2>/dev/null || true
+}
+
+is_shell_pane() {
+  case "$(pane_command "$1")" in
+    bash|zsh|fish|sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+pane_matches_role() {
+  local pane="$1"
+  local role="$2"
+  local detected
+  detected=$(detect_role_from_pane "$pane" 2>/dev/null || true)
+  [ "$detected" = "$role" ]
+}
+
+agent_command() {
+  case "$1" in
+    Claude) echo "claude --dangerously-skip-permissions" ;;
+    Gemini) echo "gemini --sandbox false --yolo" ;;
+    Codex) echo "codex --dangerously-bypass-approvals-and-sandbox" ;;
+  esac
+}
+
+ROLE_OVERRIDE=""
+FORCE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --as)
+      [ -n "${2:-}" ] || { echo "ERROR: --as requires a role." >&2; usage; exit 1; }
+      ROLE_OVERRIDE=$(normalize_role "$2") || {
+        echo "ERROR: Invalid role '$2'." >&2
+        usage
+        exit 1
+      }
+      shift 2
+      ;;
+    --force)
+      FORCE=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: Unknown argument '$1'." >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$TMUX" ]; then
+  echo "ERROR: Not running inside a tmux session." >&2
+  exit 1
+fi
+
+CURRENT_TARGET=$(tmux display-message -p '#S:#I')
+CURRENT_PANE=$(tmux display-message -p '#P')
+
+AGENT_CLAUDE="Claude"
+AGENT_GEMINI="Gemini"
+AGENT_CODEX="Codex"
+ARCHIVE_KEEP_MINUTES=20
+DAEMON_INTERVAL=300
+TMUX_TARGET_OLD=""
+PANE_CLAUDE_OLD=""
+PANE_GEMINI_OLD=""
+PANE_CODEX_OLD=""
+
+if [ -f "$CONF_PATH" ]; then
+  # shellcheck disable=SC1090
+  source "$CONF_PATH"
+  TMUX_TARGET_OLD="${TMUX_TARGET:-}"
+  PANE_CLAUDE_OLD="${PANE_CLAUDE:-}"
+  PANE_GEMINI_OLD="${PANE_GEMINI:-}"
+  PANE_CODEX_OLD="${PANE_CODEX:-}"
+fi
+
+INVOKER="$ROLE_OVERRIDE"
+if [ -z "$INVOKER" ] && [ "$TMUX_TARGET_OLD" = "$CURRENT_TARGET" ]; then
+  [ "$CURRENT_PANE" = "$PANE_CLAUDE_OLD" ] && INVOKER="Claude"
+  [ "$CURRENT_PANE" = "$PANE_GEMINI_OLD" ] && INVOKER="Gemini"
+  [ "$CURRENT_PANE" = "$PANE_CODEX_OLD" ] && INVOKER="Codex"
+fi
+if [ -z "$INVOKER" ]; then
+  INVOKER=$(detect_role_from_pane "$CURRENT_TARGET.$CURRENT_PANE" 2>/dev/null || true)
+fi
+if [ -z "$INVOKER" ]; then
+  echo "ERROR: Could not infer the invoking agent for pane $CURRENT_PANE." >&2
+  echo "Re-run with: ./recruit --as Claude|Gemini|Codex" >&2
+  exit 1
+fi
+
+NUM_PANES=$(tmux list-panes -t "$CURRENT_TARGET" | wc -l | tr -d ' ')
+if [ "$NUM_PANES" -gt 3 ]; then
+  echo "ERROR: $CURRENT_TARGET already has $NUM_PANES panes. Recruit only supports windows with up to 3 panes." >&2
+  echo "Use a clean tmux window or remove extra panes first." >&2
+  exit 1
+fi
+
+while [ "$NUM_PANES" -lt 3 ]; do
+  tmux split-window -t "$CURRENT_TARGET" -c "$SCRIPT_DIR" >/dev/null || exit 1
+  NUM_PANES=$(tmux list-panes -t "$CURRENT_TARGET" | wc -l | tr -d ' ')
+done
+
+tmux select-layout -t "$CURRENT_TARGET" main-horizontal >/dev/null
+
+mapfile -t PANES < <(tmux list-panes -t "$CURRENT_TARGET" -F '#{pane_index}' | sort -n)
+REMAINING_ROLES="Claude Gemini Codex"
+case "$INVOKER" in
+  Claude) PANE_CLAUDE="$CURRENT_PANE"; REMAINING_ROLES="Gemini Codex" ;;
+  Gemini) PANE_GEMINI="$CURRENT_PANE"; REMAINING_ROLES="Claude Codex" ;;
+  Codex) PANE_CODEX="$CURRENT_PANE"; REMAINING_ROLES="Claude Gemini" ;;
+esac
+
+AVAILABLE_PANES=()
+for pane in "${PANES[@]}"; do
+  if [ "$pane" != "$CURRENT_PANE" ]; then
+    AVAILABLE_PANES+=("$pane")
+  fi
+done
+
+for pane in "${AVAILABLE_PANES[@]}"; do
+  detected=$(detect_role_from_pane "$CURRENT_TARGET.$pane" 2>/dev/null || true)
+  case "$detected" in
+    Claude)
+      [ -z "${PANE_CLAUDE:-}" ] && PANE_CLAUDE="$pane"
+      REMAINING_ROLES=$(printf '%s\n' $REMAINING_ROLES | grep -vx "Claude" | xargs)
+      ;;
+    Gemini)
+      [ -z "${PANE_GEMINI:-}" ] && PANE_GEMINI="$pane"
+      REMAINING_ROLES=$(printf '%s\n' $REMAINING_ROLES | grep -vx "Gemini" | xargs)
+      ;;
+    Codex)
+      [ -z "${PANE_CODEX:-}" ] && PANE_CODEX="$pane"
+      REMAINING_ROLES=$(printf '%s\n' $REMAINING_ROLES | grep -vx "Codex" | xargs)
+      ;;
+  esac
+done
+
+for role in $REMAINING_ROLES; do
+  for pane in "${AVAILABLE_PANES[@]}"; do
+    case "$role" in
+      Claude) [ -n "${PANE_CLAUDE:-}" ] && continue ;;
+      Gemini) [ -n "${PANE_GEMINI:-}" ] && continue ;;
+      Codex) [ -n "${PANE_CODEX:-}" ] && continue ;;
+    esac
+    if [ "$pane" = "${PANE_CLAUDE:-}" ] || [ "$pane" = "${PANE_GEMINI:-}" ] || [ "$pane" = "${PANE_CODEX:-}" ]; then
+      continue
+    fi
+    case "$role" in
+      Claude) PANE_CLAUDE="$pane" ;;
+      Gemini) PANE_GEMINI="$pane" ;;
+      Codex) PANE_CODEX="$pane" ;;
+    esac
+    break
+  done
+done
+
+for required in PANE_CLAUDE PANE_GEMINI PANE_CODEX; do
+  eval "value=\${$required:-}"
+  if [ -z "$value" ]; then
+    echo "ERROR: Failed to map all agent panes." >&2
+    exit 1
+  fi
+done
+
+start_agent() {
+  local role="$1"
+  local pane="$2"
+  local target="$CURRENT_TARGET.$pane"
+  local cmd current_cmd current_title
+
+  if [ "$pane" = "$CURRENT_PANE" ]; then
+    echo "Keeping $role in current pane $pane."
+    return 0
+  fi
+
+  if pane_matches_role "$target" "$role"; then
+    echo "$role already appears to be running in pane $pane."
+    return 0
+  fi
+
+  current_cmd=$(pane_command "$target")
+  current_title=$(pane_title "$target")
+  if ! is_shell_pane "$target"; then
+    if [ "$FORCE" -ne 1 ]; then
+      echo "WARN: Pane $pane is running '$current_cmd' ($current_title). Skipping $role. Use --force to replace it." >&2
+      return 0
+    fi
+    tmux send-keys -t "$target" C-c
+    sleep 0.3
+    tmux send-keys -t "$target" "clear" Enter
+  fi
+
+  cmd=$(agent_command "$role")
+  echo "Starting $role in pane $pane..."
+  tmux send-keys -t "$target" "$cmd" Enter
+}
+
+start_agent "Claude" "$PANE_CLAUDE"
+start_agent "Gemini" "$PANE_GEMINI"
+start_agent "Codex" "$PANE_CODEX"
+
+PANE_LIST=$(printf '%s\n%s\n%s\n' "$PANE_CLAUDE" "$PANE_GEMINI" "$PANE_CODEX" | sort -n | xargs)
+GEMINI_PANE="$PANE_GEMINI"
+AGENT_LIST="$AGENT_CLAUDE $AGENT_GEMINI $AGENT_CODEX"
+
+cat > "$CONF_PATH" << EOF
+# Multi-Agent Team Configuration
+# Automatically updated by ./recruit
+
+# Tmux session and window
+TMUX_TARGET="$CURRENT_TARGET"
+
+# Pane assignments
+PANE_CLAUDE=$PANE_CLAUDE
+PANE_GEMINI=$PANE_GEMINI
+PANE_CODEX=$PANE_CODEX
+
+# Agent names
+AGENT_CLAUDE="$AGENT_CLAUDE"
+AGENT_GEMINI="$AGENT_GEMINI"
+AGENT_CODEX="$AGENT_CODEX"
+
+# Scripting helpers
+PANE_LIST="$PANE_LIST"
+AGENT_LIST="$AGENT_LIST"
+GEMINI_PANE=$GEMINI_PANE
+
+# Chatroom archive settings
+ARCHIVE_KEEP_MINUTES=$ARCHIVE_KEEP_MINUTES
+DAEMON_INTERVAL=$DAEMON_INTERVAL
+EOF
+
+echo "Updated team.conf for $CURRENT_TARGET:"
+echo "  Claude -> pane $PANE_CLAUDE"
+echo "  Gemini -> pane $PANE_GEMINI"
+echo "  Codex  -> pane $PANE_CODEX"
+echo "Recruitment complete."
