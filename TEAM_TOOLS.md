@@ -10,17 +10,18 @@ All scripts read from `team.conf` in the project root. Edit it to match your tmu
 - **File**: `chatroom.md` in the project root
 - Read it anytime to catch up on team discussion
 - Append your messages to the end
+- Treat broadcast messages as shared context, not an automatic request for everyone to reply
 
 ### Chat Script (post + notify)
 ```bash
 ./chat <YourName> "<message>"
 ```
-Posts to chatroom.md AND sends a tmux display-message to all agent panes.
+Posts to `chatroom.md` and flashes a tmux display-message to all agent panes. This creates a durable record, but it is not guaranteed prompt-level delivery.
 
 ```bash
 ./chat --sync <YourName> "<message>"
 ```
-Appends to chatroom.md, flashes tmux notifications, and types the message into all teammate panes except the current one.
+Appends to `chatroom.md`, flashes tmux notifications, and types the message into all teammate panes except the current one. Use this only when teammates truly need immediate awareness.
 
 ### Notify Script (quick ping)
 ```bash
@@ -51,6 +52,14 @@ Detects the current tmux session/window, ensures a 3-pane layout, maps panes to 
 tmux capture-pane -t "<target>.<pane>" -p | tail -20
 ```
 (The tmux target is in `team.conf`)
+
+## Team Communication Protocol
+
+- Treat the browser-based web chat as the human operator channel by default. Agents should use `./chat`, `./chat --sync`, `./send`, and `./notify` for routine coordination.
+- Use `./chat` for the durable record and `./send` for time-sensitive direct prompts. Use `./chat --sync` or `./send --all` only when actual prompt-level delivery is required.
+- Read broadcast messages for context, but only reply when the message addresses you, addresses everyone, or addresses no one.
+- If the user addresses a specific teammate, do not relay or restate that message to the named teammate unless explicitly asked.
+- If a browser-side debug post is ever unavoidable, prefix it clearly, for example `[DEBUG Codex]`, so it is not mistaken for a normal user message.
 
 ## Chatroom Archiver
 - `chatroom.md` only keeps the **last N minutes** of messages (configurable in `team.conf`)

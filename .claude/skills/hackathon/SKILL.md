@@ -13,17 +13,32 @@ All agent names, pane numbers, and tmux targets are defined in `team.conf` at th
 
 `team.conf` is the source of truth. Never hardcode a tmux session like `1:0`, and never assume another project's repo path. Resolve commands relative to the current project root.
 
+## Workflow
+
+1. Read `team.conf` before any operation that references panes or agent names.
+2. Read `chatroom.md` before starting substantial work.
+3. Treat `./chat` as the durable record and `./send` as the direct prompt-delivery mechanism.
+4. Use `./chat --sync` or `./send --all` only when teammates truly need immediate delivery.
+5. Use `./recruit` if the team panes are missing or mapped to the wrong tmux window.
+6. Report blockers and workflow issues immediately instead of silently working around them.
+
 ## Commands
 
 Based on the argument provided by the user ($ARGUMENTS), execute one of the following:
 
-### `chat <message>` — Broadcast to team
+### `chat <message>` — Persistent record
 
-Post to chatroom AND send directly to every teammate so they process it.
+Post to the shared chatroom:
 
-1. Read `team.conf` to get pane numbers
+1. Read `team.conf`
 2. Run `./chat <YourName> "<message>"`
-3. Run `./send --from <YourName> <pane> "<message>"` for each teammate pane
+
+### `announce <message>` — Persistent record + immediate team delivery
+
+Use this only when teammates truly need to see something immediately.
+
+1. Read `team.conf`
+2. Run `./chat --sync <YourName> "<message>"`
 
 ### `send <pane> <message>` — Direct message
 
@@ -60,7 +75,7 @@ tmux capture-pane -t "<target>.<pane>" -p | tail -20
 
 1. Read chatroom
 2. Capture all teammate panes
-3. Post a status update via `chat`
+3. Post a status update via `chat` only if the user asked for a real team update
 
 ### `recruit` — Rebuild the team layout
 
@@ -79,13 +94,13 @@ Display the command list above.
 
 ### Identity Rules
 - **Never impersonate another agent or the User.** Always use your own name.
-- **The web chat (chatserver) is User-only.** Agents must not send messages through the web chat UI. Use `./chat` and `./send` from your pane.
-- If you must debug the web chat, prefix your message with `[DEBUG <YourName>]`.
+- **The web chat (chatserver) is User-only by default.** Agents should not send normal coordination messages through the web chat UI. Use `./chat`, `./chat --sync`, and `./send` from your pane.
+- If browser-side debugging is unavoidable, prefix the message with `[DEBUG <YourName>]`.
 
 ### Response Etiquette
 - **Only respond when addressed.** If a message is directed at a specific teammate (`@Gemini`, `@Codex`), only that agent should respond. Others should read but stay silent.
-- **Respond to broadcasts.** If a message addresses everyone or no one specific, any agent may respond.
-- **Don't relay addressed messages.** If the User says `@Codex do X`, do NOT repeat/relay that message to Codex via `./send`. The chatroom is shared — they can read it themselves. Only use `./send` for messages the recipient wouldn't otherwise see.
+- **Broadcasts are passive context.** If a message addresses everyone or no one specific, agents may respond, but no reply is required just because a broadcast was seen.
+- **Don't relay addressed messages.** If the User says `@Codex do X`, do NOT repeat or relay that message to Codex via `./send` unless the User explicitly asks for relay help.
 
 ### Consensus Before Action
 - **Wait for all teammates** to review and approve before pushing code or finalizing decisions. Don't rush with partial consensus.
@@ -97,9 +112,7 @@ Posting to chatroom via `./chat` is **not** real notification. The `chat` script
 
 **Real notification = `./send` to their pane.** This types directly into the teammate's CLI input.
 
-Whenever announcing something to the team, **always do both**:
-1. `./chat` for persistent chatroom record
-2. `./send` to each teammate pane for actual delivery
+Use `./chat` for the durable record. Use `./send` or `./chat --sync` only when prompt-level delivery is actually required.
 
 Never claim "notified the team" after only running `./chat`.
 

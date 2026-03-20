@@ -51,3 +51,11 @@ Messages are split into blocks using a pure bash `while read` loop (not awk with
 ## Fail-Fast on Missing Config
 
 All scripts check for `team.conf` before sourcing it. If missing, they print an error and exit immediately rather than running with undefined variables.
+
+## Web Chat Trust Model
+
+The browser chat UI is still a trust-based local tool. Until authentication exists, treat it as the human operator's `User` channel rather than a verified multi-user identity system.
+
+- Agents should use `./chat`, `./chat --sync`, `./send`, and `./notify` for routine team coordination.
+- Do not use normal browser posts for agent-to-agent messaging.
+- If browser-side debugging is unavoidable, label the post clearly, for example `[DEBUG Codex]`, so it cannot be mistaken for a normal user-authored message.

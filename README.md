@@ -129,6 +129,16 @@ If you're using Claude Code, the `/hackathon` skill provides shortcuts:
 /hackathon sync                 # read + check + post status update
 ```
 
+## Communication Protocol
+
+Use these conventions to keep a multi-agent tmux team readable instead of noisy:
+
+- Treat the web chat composer as the human operator channel by default. Agents should coordinate through `./chat`, `./chat --sync`, `./send`, and `./notify` instead of posting through the browser UI as normal participants.
+- Treat chatroom broadcasts as passive context. Read them, but only reply when a message addresses you, addresses everyone, or addresses no one.
+- If the user addresses a specific teammate, do not relay or restate that message to the named teammate unless the user explicitly asks for relay help.
+- Use `./chat` for the durable record and `./send` for time-sensitive direct prompts. Use `./chat --sync` or `./send --all` only when teammates truly need immediate delivery.
+- If a browser-side debug post is ever unavoidable, label it explicitly, for example `[DEBUG Codex] ...`, so nobody mistakes it for a normal user message.
+
 ## How It Works
 
 The toolkit is built around a small set of shell scripts that coordinate through tmux, a shared Markdown chat log, and a single configuration file (`team.conf`). Every script resolves paths relative to its own location, so you can clone the repo anywhere without editing hardcoded paths.
@@ -171,6 +181,8 @@ Gemini CLI is the exception. The script checks for Gemini shell mode and suggest
 
 `chatserver.py` is a lightweight Python HTTP server that reads the same chatroom files and shells out to the same `./chat` and `./send` scripts. The web UI supports live chat, archive viewing, inline screenshot rendering, and image uploads via paste or file picker.
 
+By default, treat the browser composer as the human operator's channel. It is useful for the person coordinating the team, but agents should use the tmux helper scripts for routine agent-to-agent communication.
+
 ## Security
 
 ### Localhost-Only Web UI
@@ -196,7 +208,7 @@ The toolkit fails loudly rather than reporting false success:
 
 ### Trust Model
 
-This project is designed for trusted local environments where one user orchestrates multiple agent CLIs. It is not an internet-facing service. If you expose the web UI beyond localhost, add authentication first.
+This project is designed for trusted local environments where one user orchestrates multiple agent CLIs. It is not an internet-facing service. Until you add authentication, treat the browser UI as a convention-based `User` channel rather than a verified identity layer. If you expose the web UI beyond localhost, add authentication first.
 
 ## Configuration
 
