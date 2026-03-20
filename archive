@@ -1,0 +1,136 @@
+#!/bin/bash
+# Archive old chatroom messages — keeps only messages from the last N minutes
+# Moves older messages to chatroom_archive.md with a timestamped section header
+# Uses the same flock as chat to prevent race conditions
+#
+# Usage: ./archive              (one-shot)
+#        ./archive --dry-run    (preview what would be archived)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
+source "$SCRIPT_DIR/team.conf"
+
+CHATROOM="$SCRIPT_DIR/chatroom.md"
+ARCHIVE="$SCRIPT_DIR/chatroom_archive.md"
+# Use a hash of the full path to avoid collisions between same-named directories
+PROJECT_HASH=$(printf "%s" "$SCRIPT_DIR" | md5sum | cut -c1-8)
+LOCKFILE="/tmp/team_${PROJECT_HASH}_chatroom.lock"
+KEEP_MINUTES="${ARCHIVE_KEEP_MINUTES:-20}"
+DRY_RUN=0
+
+if [ "${1:-}" = "--dry-run" ]; then
+  DRY_RUN=1
+fi
+
+# Initialize archive if it doesn't exist
+if [ ! -f "$ARCHIVE" ]; then
+  cat > "$ARCHIVE" << 'HEADER'
+# Chatroom Archive
+Archived conversations are stored here in reverse-chronological sections.
+
+---
+HEADER
+fi
+
+(
+  flock -w 10 200 || { echo "ERROR: Could not acquire chatroom lock"; exit 1; }
+
+  NOW=$(date +%s)
+  CUTOFF=$((NOW - KEEP_MINUTES * 60))
+
+  # Find where messages start (first line starting with **[)
+  HEADER_END=$(grep -n '^\*\*\[' "$CHATROOM" | head -1 | cut -d: -f1 || true)
+
+  if [ -z "$HEADER_END" ]; then
+    echo "No messages to archive."
+    exit 0
+  fi
+
+  HEADER_LINES=$((HEADER_END - 1))
+
+  KEEP_FILE=$(mktemp)
+  ARCHIVE_FILE=$(mktemp)
+  HEADER_FILE=$(mktemp)
+  trap 'rm -f "$KEEP_FILE" "$ARCHIVE_FILE" "$HEADER_FILE"' EXIT
+
+  head -n "$HEADER_LINES" "$CHATROOM" > "$HEADER_FILE"
+
+  # Split messages into blocks using pure bash (no awk NUL issues with mawk).
+  # Each block starts with a line matching **[ and includes all following lines
+  # until the next **[ line.
+  ARCHIVED_COUNT=0
+  KEPT_COUNT=0
+  CURRENT_BLOCK=""
+
+  _process_block() {
+    local block="$1"
+    [ -z "$block" ] && return
+
+    # Extract date from first line — look for YYYY-MM-DD HH:MM:SS or YYYY-MM-DD
+    local first_line
+    first_line=$(echo "$block" | head -1)
+    local ts_str
+    ts_str=$(echo "$first_line" | grep -oP '\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?' | head -1 || true)
+
+    local msg_ts=0
+    if [ -n "$ts_str" ]; then
+      # Pad if no time component
+      if [[ ! "$ts_str" =~ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+        ts_str="$ts_str 00:00:00"
+      fi
+      msg_ts=$(date -d "$ts_str" +%s 2>/dev/null || echo "0")
+    fi
+
+    if [ "$msg_ts" -lt "$CUTOFF" ]; then
+      printf '%s\n\n' "$block" >> "$ARCHIVE_FILE"
+      ARCHIVED_COUNT=$((ARCHIVED_COUNT + 1))
+    else
+      printf '%s\n\n' "$block" >> "$KEEP_FILE"
+      KEPT_COUNT=$((KEPT_COUNT + 1))
+    fi
+  }
+
+  while IFS= read -r line; do
+    if [[ "$line" == \*\*\[* ]]; then
+      # Start of a new message block — flush the previous one
+      _process_block "$CURRENT_BLOCK"
+      CURRENT_BLOCK="$line"
+    elif [ -n "$CURRENT_BLOCK" ]; then
+      CURRENT_BLOCK="$CURRENT_BLOCK
+$line"
+    fi
+  done < <(tail -n +"$HEADER_END" "$CHATROOM")
+
+  # Flush the last block
+  _process_block "$CURRENT_BLOCK"
+
+  if [ "$ARCHIVED_COUNT" -eq 0 ]; then
+    echo "Nothing to archive (all messages within last ${KEEP_MINUTES} min)."
+    exit 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "DRY RUN: Would archive $ARCHIVED_COUNT messages, keep $KEPT_COUNT."
+    echo "--- Would archive: ---"
+    cat "$ARCHIVE_FILE"
+    exit 0
+  fi
+
+  # Append archived messages to archive file with section header
+  ARCHIVE_TS=$(date '+%Y-%m-%d %H:%M:%S')
+  {
+    echo ""
+    echo "### Archived at $ARCHIVE_TS"
+    echo ""
+    cat "$ARCHIVE_FILE"
+  } >> "$ARCHIVE"
+
+  # Rebuild chatroom: header + recent messages
+  {
+    cat "$HEADER_FILE"
+    cat "$KEEP_FILE"
+  } > "$CHATROOM"
+
+  echo "Archived $ARCHIVED_COUNT messages, kept $KEPT_COUNT. Archive: $ARCHIVE"
+
+) 200>"$LOCKFILE"

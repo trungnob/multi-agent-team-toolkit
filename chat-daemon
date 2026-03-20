@@ -1,0 +1,114 @@
+#!/bin/bash
+# Background daemon that archives old chatroom messages periodically
+# Keeps only the last N minutes of messages in chatroom.md
+# Older messages go to chatroom_archive.md
+#
+# Usage: ./chat-daemon start    — start in background
+#        ./chat-daemon stop     — stop running daemon
+#        ./chat-daemon status   — check if running
+#        ./chat-daemon run      — run in foreground (for testing)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
+source "$SCRIPT_DIR/team.conf"
+
+PROJECT_HASH=$(printf "%s" "$SCRIPT_DIR" | md5sum | cut -c1-8)
+PROJECT_NAME="team_${PROJECT_HASH}"
+PIDFILE="/tmp/${PROJECT_NAME}_chat_daemon.pid"
+PIDLOCK="/tmp/${PROJECT_NAME}_chat_daemon.lock"
+LOGFILE="$SCRIPT_DIR/.chat-daemon.log"
+ARCHIVE_SCRIPT="$SCRIPT_DIR/archive"
+INTERVAL="${DAEMON_INTERVAL:-300}"
+
+_run_loop() {
+  echo "Chat daemon started at $(date) (PID $$)" >> "$LOGFILE"
+  echo $$ > "$PIDFILE"
+  trap '[ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"; echo "Chat daemon stopped at $(date)" >> "$LOGFILE"; exit 0' TERM INT HUP
+
+  while true; do
+    sleep "$INTERVAL"
+    RESULT=$("$ARCHIVE_SCRIPT" 2>&1) || true
+    if [ -n "$RESULT" ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] $RESULT" >> "$LOGFILE"
+    fi
+  done
+}
+
+# All start/stop/status operations lock the PID file to prevent races
+case "${1:-start}" in
+  start)
+    (
+      flock -w 5 200 || { echo "ERROR: Could not acquire daemon lock"; exit 1; }
+
+      if [ -f "$PIDFILE" ]; then
+        OLD_PID=$(cat "$PIDFILE")
+        if kill -0 "$OLD_PID" 2>/dev/null; then
+          echo "Daemon already running (PID $OLD_PID)"
+          exit 0
+        fi
+        rm -f "$PIDFILE"
+      fi
+
+      # Fork into background with nohup, close fd 200 so child doesn't hold the lock
+      nohup bash "$0" run >> "$LOGFILE" 2>&1 200>&- &
+      DAEMON_PID=$!
+      disown "$DAEMON_PID"
+      sleep 0.5
+
+      if kill -0 "$DAEMON_PID" 2>/dev/null; then
+        echo "Chat daemon started (PID $DAEMON_PID, interval ${INTERVAL}s). Log: $LOGFILE"
+      else
+        echo "ERROR: Daemon failed to start"
+        exit 1
+      fi
+    ) 200>"$PIDLOCK"
+    ;;
+
+  run)
+    # Foreground mode — called by nohup from 'start'
+    _run_loop
+    ;;
+
+  stop)
+    (
+      flock -w 5 200 || { echo "ERROR: Could not acquire daemon lock"; exit 1; }
+
+      if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        if kill -0 "$PID" 2>/dev/null; then
+          kill "$PID"
+          rm -f "$PIDFILE"
+          echo "Daemon stopped (was PID $PID)"
+        else
+          rm -f "$PIDFILE"
+          echo "Stale PID file removed (process $PID not running)"
+        fi
+      else
+        echo "No daemon running"
+      fi
+    ) 200>"$PIDLOCK"
+    ;;
+
+  status)
+    (
+      flock -w 5 200 || { echo "ERROR: Could not acquire daemon lock"; exit 1; }
+
+      if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        if kill -0 "$PID" 2>/dev/null; then
+          echo "Running (PID $PID)"
+        else
+          rm -f "$PIDFILE"
+          echo "Not running (stale PID file, cleaned up)"
+        fi
+      else
+        echo "Not running"
+      fi
+    ) 200>"$PIDLOCK"
+    ;;
+
+  *)
+    echo "Usage: ./chat-daemon {start|stop|status|run}"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,12 @@
+#!/bin/bash
+# Send a quick tmux notification to a specific pane (mention/ping)
+# Usage: ./notify <pane> <message>
+# Pane numbers are configured in team.conf
+#
+# display-message is already atomic per-pane in tmux, no lock needed.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
+source "$SCRIPT_DIR/team.conf"
+
+tmux display-message -t "$TMUX_TARGET.${1:-0}" "${2:-Check the chatroom!}" 2>/dev/null

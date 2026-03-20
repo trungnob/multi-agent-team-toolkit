@@ -1,0 +1,79 @@
+#!/bin/bash
+# Send a message to a teammate's tmux pane as a proper prompt input
+# Usage: ./send [--from <name>] <pane> <message>
+# Pane numbers are configured in team.conf
+#
+# Uses flock to serialize tmux buffer access (prevents race conditions).
+# Uses a named tmux buffer unique to this PID as extra safety.
+# When --from is provided, the message is prefixed with "[<name>]: " so the
+# receiving agent knows who sent it.
+# For best results, the target pane should be at its agent prompt rather than
+# inside a nested shell.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
+source "$SCRIPT_DIR/team.conf"
+
+FROM=""
+if [ "$1" = "--from" ]; then
+  FROM="$2"
+  shift 2
+fi
+
+PANE="${1:-0}"
+shift
+MSG="$*"
+
+if [ -z "$MSG" ]; then
+  echo "Usage: ./send [--from <name>] <pane> <message>"
+  echo "  Panes: ${PANE_CLAUDE}=${AGENT_CLAUDE}, ${PANE_GEMINI}=${AGENT_GEMINI}, ${PANE_CODEX}=${AGENT_CODEX}"
+  exit 1
+fi
+
+# Prefix with sender name if provided
+if [ -n "$FROM" ]; then
+  MSG="[$FROM]: $MSG"
+fi
+
+TARGET="$TMUX_TARGET.$PANE"
+PROJECT_HASH=$(printf "%s" "$SCRIPT_DIR" | md5sum | cut -c1-8)
+LOCKFILE="/tmp/team_${PROJECT_HASH}_tmux_send.lock"
+BUFNAME="send_$$"
+
+cleanup_buffer() {
+  tmux delete-buffer -b "$BUFNAME" 2>/dev/null || true
+}
+
+# Acquire exclusive lock for tmux buffer + paste operation
+if ! (
+  flock -w 10 200 || { echo "ERROR: Could not acquire tmux send lock"; exit 1; }
+  trap cleanup_buffer EXIT
+
+  # For Gemini pane: send Escape first in case it is currently in shell mode.
+  if [ "$PANE" = "$PANE_GEMINI" ]; then
+    tmux send-keys -t "$TARGET" Escape || { echo "ERROR: Failed to send Escape to pane $PANE" >&2; exit 1; }
+    sleep 1
+  fi
+
+  # Use a named buffer (unique per PID) to avoid clobbering the global buffer
+  printf '%s' "$MSG" | tmux load-buffer -b "$BUFNAME" - || {
+    echo "ERROR: Failed to load tmux buffer" >&2
+    exit 1
+  }
+  tmux paste-buffer -b "$BUFNAME" -t "$TARGET" || {
+    echo "ERROR: Failed to paste buffer into pane $PANE" >&2
+    exit 1
+  }
+  cleanup_buffer
+
+  # Small delay then send Enter to submit
+  sleep 0.5
+  tmux send-keys -t "$TARGET" Enter || {
+    echo "ERROR: Failed to press Enter in pane $PANE" >&2
+    exit 1
+  }
+) 200>"$LOCKFILE"; then
+  exit 1
+fi
+
+echo "Sent to pane $PANE"
