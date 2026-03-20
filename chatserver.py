@@ -12,6 +12,8 @@ import uuid
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("CHATSERVER_PORT", 9091))
 BIND_ADDR = os.environ.get("CHATSERVER_BIND", "127.0.0.1")
+MAX_JSON_BYTES = int(os.environ.get("CHATSERVER_MAX_JSON_BYTES", 262144))
+MAX_UPLOAD_BYTES = int(os.environ.get("CHATSERVER_MAX_UPLOAD_BYTES", 8 * 1024 * 1024))
 CHATROOM = os.path.join(SCRIPT_DIR, "chatroom.md")
 ARCHIVE = os.path.join(SCRIPT_DIR, "chatroom_archive.md")
 PROPOSAL = os.path.join(SCRIPT_DIR, "proposal.md")
@@ -394,14 +396,29 @@ class ChatHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/send":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
-            name = body.get("name", "User")
-            message = body.get("message", "")
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0 or length > MAX_JSON_BYTES:
+                self._send_json({"ok": False, "error": "Invalid request size"}, 400)
+                return
+            try:
+                body = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "Invalid JSON"}, 400)
+                return
+            name = str(body.get("name", "User"))
+            message = str(body.get("message", ""))
             self._process_message(name, message)
         elif self.path == "/api/upload":
-            ctype, pdict = cgi.parse_header(self.headers.get("Content-Type"))
-            if ctype != "multipart/form-data":
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0:
+                self._send_json({"ok": False, "error": "Empty upload"}, 400)
+                return
+            if length > MAX_UPLOAD_BYTES:
+                self._send_json({"ok": False, "error": "Upload exceeds size limit"}, 413)
+                return
+
+            ctype, pdict = cgi.parse_header(self.headers.get("Content-Type", ""))
+            if ctype != "multipart/form-data" or "boundary" not in pdict:
                 self._send_json({"ok": False, "error": "Expected multipart/form-data"}, 400)
                 return
 
