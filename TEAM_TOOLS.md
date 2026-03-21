@@ -28,17 +28,25 @@ Appends to `chatroom.md`, flashes tmux notifications, and types the message into
 ./notify <pane> "<message>"
 ```
 
-### Send Script (direct message to a teammate's input)
+### send Script (direct message to a teammate's input)
 ```bash
 ./send <pane> "<message>"
 ```
 ```bash
 ./send --all "<message>"
 ```
-Uses tmux paste-buffer for most panes and a Gemini-specific literal typing path to avoid shell-mode paste bugs. When `--from` is supplied, the send is also logged to the shared chatroom once.
+Uses tmux paste-buffer for most panes and a Gemini-specific literal typing path to avoid shell-mode paste bugs. Improved to handle Gemini's 'Working' and 'Queued' states by force-clearing stale input with `C-u` before delivery.
 
-**IMPORTANT**: Do NOT use `tmux send-keys` with raw text — special characters
-get escaped. Always use the `send` script instead.
+### Image Generation Skill (Multimodal)
+Located at: `scripts/generate_image.py`
+Requires: `pip install google-genai`
+API Keys: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+
+Usage:
+```bash
+python3 scripts/generate_image.py "a professional healthcare infographic"
+```
+Generated images are saved to the `uploads/` folder. Coordinate with the team before generating to avoid quota usage and duplicates.
 
 ### Recruit Script (recover or build the 3-agent pane layout)
 ```bash

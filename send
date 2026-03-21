@@ -129,43 +129,70 @@ send_to_pane() {
     return 1
   fi
 
+  gemini_capture_recent() {
+    tmux capture-pane -t "$target" -p 2>/dev/null | tail -n 20
+  }
+
   gemini_shell_mode_active() {
-    tmux capture-pane -t "$target" -p 2>/dev/null | tail -n 10 | grep -Eq '(shell mode enabled|^[[:space:]]*![[:space:]].*Type your shell command|^[[:space:]]*![[:space:]]*$)'
+    gemini_capture_recent | grep -Eq '(shell mode enabled|^[[:space:]]*![[:space:]].*Type your shell command|^[[:space:]]*![[:space:]]*$)'
   }
 
   gemini_chat_mode_active() {
-    tmux capture-pane -t "$target" -p 2>/dev/null | tail -n 5 | grep -Eq '^[[:space:]]*\*[[:space:]]'
+    gemini_capture_recent | tail -n 5 | grep -Eq '^[[:space:]]*\*[[:space:]]'
   }
 
   gemini_suggestion_active() {
-    tmux capture-pane -t "$target" -p 2>/dev/null | tail -n 5 | grep -Eq '^[[:space:]]*>[[:space:]]'
+    gemini_capture_recent | tail -n 10 | grep -Eq '(^[[:space:]]*>[[:space:]]|Queued \(press ↑ to edit\))'
+  }
+
+  gemini_input_prompt_active() {
+    gemini_capture_recent | grep -Eq '(Type your message|@path/to/file|workspace \(/directory\)|✦)'
+  }
+
+  gemini_queue_active() {
+    gemini_capture_recent | grep -Eq 'Queued \(press ↑ to edit\)'
+  }
+
+  gemini_overlay_active() {
+    gemini_capture_recent | grep -Eq '(esc to cancel|Hide the startup banner|YOLO Ctrl\+Y|bypass permissions on)'
   }
 
   gemini_busy_active() {
-    tmux display-message -p -t "$target" '#{pane_title}' 2>/dev/null | grep -Eq '(Working|Thinking|Loading|Running|Finalizing)'
+    local title
+    title=$(tmux display-message -p -t "$target" '#{pane_title}' 2>/dev/null || true)
+    if printf '%s' "$title" | grep -Eq '(Working|Thinking|Loading|Running|Finalizing)'; then
+      return 0
+    fi
+    if gemini_queue_active || gemini_overlay_active; then
+      return 0
+    fi
+    return 1
   }
 
-  reset_gemini_input() {
-    if gemini_busy_active; then
-      echo "ERROR: Gemini pane $p is busy; refusing to queue input" >&2
-      return 1
+  reset_input() {
+    if [ "$p" = "$GEMINI_PANE" ]; then
+      # Respect Gemini's current mode. If it is in shell mode, fail cleanly
+      # instead of forcing a mode switch. Busy chat mode is allowed because
+      # Gemini CLI can queue a normal message after Enter.
+      if gemini_shell_mode_active && ! gemini_chat_mode_active; then
+        echo "ERROR: Gemini pane $p is in shell mode; not switching modes automatically" >&2
+        return 1
+      fi
+      if ! gemini_input_prompt_active; then
+        echo "ERROR: Gemini pane $p does not show the regular message prompt" >&2
+        return 1
+      fi
     fi
-    if gemini_shell_mode_active && ! gemini_chat_mode_active; then
-      tmux send-keys -t "$target" Escape || return 1
-      sleep 0.3
-    fi
-    if gemini_suggestion_active; then
-      tmux send-keys -t "$target" Escape || return 1
-      sleep 0.3
-    fi
-    # Clear any stale queued text before typing a fresh message.
+
+    # Clear any stale text in the current input line without changing modes.
     tmux send-keys -t "$target" C-u || return 1
-    sleep 0.1
+    sleep 0.2
     return 0
   }
 
+  reset_input || return 1
+
   if [ "$p" = "$GEMINI_PANE" ]; then
-    reset_gemini_input || return 1
     tmux send-keys -t "$target" -l "$display_msg" || return 1
     sleep 0.3
     tmux send-keys -t "$target" Enter || return 1
@@ -176,7 +203,7 @@ send_to_pane() {
       return 1
     fi
     tmux delete-buffer -b "$bufname" 2>/dev/null
-    sleep 0.3
+    sleep 0.4
     tmux send-keys -t "$target" Enter || return 1
   fi
   return 0

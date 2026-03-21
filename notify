@@ -9,4 +9,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ ! -f "$SCRIPT_DIR/team.conf" ] && { echo "ERROR: team.conf not found in $SCRIPT_DIR" >&2; exit 1; }
 source "$SCRIPT_DIR/team.conf"
 
-tmux display-message -t "$TMUX_TARGET.${1:-0}" "${2:-Check the chatroom!}" 2>/dev/null
+CURRENT_TARGET=""
+if [ -n "$TMUX" ]; then
+  CURRENT_TARGET=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I' 2>/dev/null || true)
+fi
+
+EFFECTIVE_TARGET="$TMUX_TARGET"
+if [ "$TMUX_TARGET" = "auto" ] || [ "$TMUX_TARGET" = "current" ] || [ -z "$TMUX_TARGET" ]; then
+  EFFECTIVE_TARGET="$CURRENT_TARGET"
+fi
+
+if [ -z "$EFFECTIVE_TARGET" ]; then
+  echo "ERROR: TMUX_TARGET is auto/current but no current tmux window is available." >&2
+  exit 1
+fi
+
+tmux display-message -t "$EFFECTIVE_TARGET.${1:-0}" "${2:-Check the chatroom!}" 2>/dev/null
