@@ -1,51 +1,46 @@
-# Shared Image Generator Skill
+# Image Generator Skill
 
-Team-shared image generation using Google Gemini API.
+Canonical location for the shared image-generator workflow:
 
-## Setup
-
-1. Install the dependency:
-```bash
-pip install google-genai
-```
-
-2. Set your API key (either works):
-```bash
-export GEMINI_API_KEY="your-key-here"
-# or
-export GOOGLE_API_KEY="your-key-here"
-```
+- Script: `scripts/generate_image.py`
+- Claude skill: `.claude/skills/generate-image/SKILL.md`
 
 ## Usage
 
+Run the toolkit script with a plain prompt:
+
 ```bash
-python3 scripts/generate_image.py "<prompt>"
+python3 scripts/generate_image.py "a clinician-facing healthcare infographic"
 ```
 
-Images are saved to `uploads/` with timestamped filenames.
+## Environment
+
+The script reads one of these environment variables:
+
+- `GEMINI_API_KEY`
+- `GOOGLE_API_KEY`
+
+Do not paste keys into the team chatroom, chat archive, or any committed file.
+Keep them only in a local gitignored `.env` or your shell environment.
 
 ## Model selection
 
-Default model: `nano-banana-pro-preview`
+Default model:
 
-Override with:
+- `nano-banana-pro-preview`
+
+Override if needed:
+
 ```bash
-IMAGE_GEN_MODEL=gemini-3.1-flash-image-preview python3 scripts/generate_image.py "<prompt>"
+IMAGE_GEN_MODEL=gemini-3.1-flash-image-preview python3 scripts/generate_image.py "your prompt"
 ```
 
-## Available models
+## Output
 
-| Model | Quality | Cost/Image |
-|-------|---------|------------|
-| `imagen-4.0-fast-generate-001` | Good | ~$0.02 |
-| `gemini-2.5-flash-image` | Good | ~$0.039 |
-| `nano-banana-pro-preview` (default) | Excellent | ~$0.134 |
-| `gemini-3.1-flash-image-preview` | Best | ~$0.045 |
+Generated images are written to `uploads/` by default.
 
-## Coordination rule
+## Coordination
 
-Do not generate duplicate content. Before running, assign image ownership clearly across the team.
-
-## Claude Code skill
-
-The `/generate-image` skill is available at `.claude/skills/generate-image/SKILL.md` and wraps this script for use within Claude Code conversations.
+- Check `uploads/` first to avoid duplicate generations.
+- Assign image ownership before using quota-heavy prompts.
+- Prefer one shared script over private per-agent copies.

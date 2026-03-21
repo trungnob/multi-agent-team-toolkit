@@ -33,7 +33,10 @@ This toolkit transforms your terminal into a high-bandwidth mission control, bre
 | `archive` | Move old chatroom messages to `chatroom_archive.md` |
 | `chat-daemon` | Background daemon that auto-archives every N minutes |
 | `chatserver.py` | Web UI for the chatroom (live view, archive, send messages, screenshots) |
+| `scripts/generate_image.py` | Shared Gemini image-generation entry point |
+| `docs/IMAGE_GENERATOR_SKILL.md` | Safe usage guide for the image generator |
 | `.claude/skills/hackathon/` | Claude Code skill for team coordination |
+| `.claude/skills/generate-image/` | Claude Code skill for the shared image generator |
 | `TEAM_TOOLS.md` | Full reference doc for all tools |
 
 ## Quick Start
@@ -165,7 +168,7 @@ The `./send` flow:
 4. Clean up the temporary buffer
 5. Press Enter to submit
 
-Gemini CLI is the exception. The script checks for Gemini shell mode and suggestion UI, dismisses them only when they are actually visible, clears any stale queued input, and refuses to send if Gemini is still actively working. When Gemini is ready, it uses `send-keys -l` to type the message literally, because pasted input can be misinterpreted there.
+Gemini CLI is the exception. The script uses `send-keys -l` to type the message literally because pasted input can be misinterpreted there. It clears stale input with `C-u`, keeps Gemini in its current mode, and allows a normal queued message while Gemini is busy if the regular message prompt is already visible. It does not force Gemini out of shell mode; shell mode fails cleanly instead of switching modes automatically.
 
 ### Chatroom and Archiving
 
@@ -188,6 +191,10 @@ By default, treat the browser composer as the human operator's channel. It is us
 ### Localhost-Only Web UI
 
 The web server binds to `127.0.0.1` by default. The `/api/send` endpoint can forward messages into agent panes, so exposing it to a network would allow prompt injection. Override with `CHATSERVER_BIND=0.0.0.0` only on trusted networks.
+
+### Secret Hygiene
+
+Keep API keys only in local environment variables or a gitignored `.env`. Do not paste them into the chatroom, archives, skills, or committed docs.
 
 ### XSS Protection
 

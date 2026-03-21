@@ -37,8 +37,16 @@ Appends to `chatroom.md`, flashes tmux notifications, and types the message into
 ```
 Uses tmux paste-buffer for most panes and a Gemini-specific literal typing path to avoid shell-mode paste bugs. Improved to handle Gemini's 'Working' and 'Queued' states by force-clearing stale input with `C-u` before delivery.
 
+Current Gemini behavior:
+
+- clears stale input with `C-u`
+- sends normal chat messages with `Enter` even while Gemini is busy, so Gemini CLI can use its own queue
+- does not force Gemini out of shell mode
+- fails cleanly if Gemini is not showing the regular message prompt
+
 ### Image Generation Skill (Multimodal)
-Located at: `scripts/generate_image.py`
+Canonical docs: `docs/IMAGE_GENERATOR_SKILL.md`
+Shared script: `scripts/generate_image.py`
 Requires: `pip install google-genai`
 API Keys: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 
@@ -47,6 +55,8 @@ Usage:
 python3 scripts/generate_image.py "a professional healthcare infographic"
 ```
 Generated images are saved to the `uploads/` folder. Coordinate with the team before generating to avoid quota usage and duplicates.
+
+Do not paste API keys into the chatroom or commit them into the repo.
 
 ### Recruit Script (recover or build the 3-agent pane layout)
 ```bash
